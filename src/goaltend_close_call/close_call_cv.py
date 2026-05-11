@@ -29,6 +29,7 @@ def stratified_kfold_eval_close_calls(
     rf_params: dict | None = None,
     make_pipeline: Callable[[], Pipeline] | None = None,
     include_segmented: bool = True,
+    train_segmented_only: bool = False,
     n_splits: int = 5,
     random_state: int = 42,
     y_seg_col: str = "y",
@@ -43,6 +44,10 @@ def stratified_kfold_eval_close_calls(
     Each fold trains on CC rows outside the test fold, optionally union ``df_seg``, then
     evaluates accuracy only on the held-out CC fold. Splits always use **StratifiedKFold**
     on ``y_cc`` so legal/goaltend proportions stay similar across folds.
+
+    When ``train_segmented_only`` is True (requires ``include_segmented`` and non-empty
+    ``df_seg``), training uses **only** the segmented / obvious-reference rows each fold—no
+    close-call rows in the fit. This stress-tests transfer from clean examples to borderline clips.
     """
     if df_cc.empty:
         raise ValueError("No usable labeled close calls for CV.")
@@ -58,6 +63,12 @@ def stratified_kfold_eval_close_calls(
         z = np.zeros((0, len(feat_cols)), dtype=np.float64)
         X_seg = z
         y_seg = np.array([], dtype=object)
+
+    if train_segmented_only:
+        if not include_segmented or len(df_seg) == 0:
+            raise ValueError(
+                "train_segmented_only requires non-empty segmented data and include_segmented=True."
+            )
 
     min_class = int(pd.Series(y_cc).value_counts().min())
     k = int(min(n_splits, len(df_cc), max(min_class, 2)))
@@ -96,7 +107,10 @@ def stratified_kfold_eval_close_calls(
 
         X_tr_cc = cc_train[feat_cols].values.astype(np.float64)
         y_tr_cc = cc_train[y_cc_col].values
-        if include_segmented:
+        if train_segmented_only:
+            X_train = X_seg
+            y_train = y_seg
+        elif include_segmented:
             X_train = np.vstack([X_seg, X_tr_cc])
             y_train = np.concatenate([y_seg, y_tr_cc])
         else:
@@ -144,6 +158,7 @@ def stratified_kfold_eval_close_calls(
         "n_close_calls_evaluated": len(df_cc),
         "n_segmented_train_side": len(df_seg) if include_segmented else 0,
         "include_segmented_in_train": include_segmented,
+        "train_segmented_only": train_segmented_only,
     }
 
 
