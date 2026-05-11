@@ -31,7 +31,7 @@ def _normalize_header(df: pd.DataFrame) -> pd.DataFrame:
             rename[c] = "eyeballed_contact"
         elif key == "ground_truth":
             rename[c] = "ground_truth"
-        elif key == "filename":
+        elif key in ("filename", "file_name"):
             rename[c] = "filename"
     out = out.rename(columns=rename)
     return out

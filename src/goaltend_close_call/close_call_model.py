@@ -9,20 +9,20 @@ Goaltend vs legal model for close-call trials.
    *direction-change* scalars (scale-free) **plus** prefixed ``shape_*`` time-domain cues
    (envelopes, peaks, cross-sensor lag/corr). Typically tens of scalar features.
 3. **Transform:** ``StandardScaler`` fit on each CV training fold (zero mean / unit var per feature).
-4. **Classifier:** choose with ``GOALTEND_MODEL`` — ``logistic`` (linear, interpretable
-   coefficients), ``hgb`` (gradient boosted trees, default), or ``rf`` (random forest).
-   Logistic uses weighted ℓ2 regularization via ``C``; trees use ``class_weight``.
+4. **Classifier:** default **AdaBoost** on shallow decision trees (league-office champion;
+   see README). Alternatives: ``logistic``, ``hgb``, ``rf`` via ``GOALTEND_MODEL``.
 
-Training pool (default): **usable labeled close calls only** (``GOALTEND_TRAIN_CLOSE_ONLY=0``
-adds segmented folders + synthetic augmentations per fold).
+Training pool (default): **segmented + close-call folds per CV** (set ``GOALTEND_TRAIN_CLOSE_ONLY=1``
+to use **only** labeled close calls in each fold; no segmented union).
 
-Evaluation: **StratifiedK-fold OOF** on close calls; optional **coefficient CSV** for logistic
+Evaluation: **StratifiedK-fold OOF** on close calls; **pooled OOF** on segmented ∪ close
+calls (every row gets a hold-out prediction); optional **coefficient CSV** for logistic
 (refit on all labeled close calls for interpretation — see ``run()``).
 
 Sensor conventions match ``sensor_io`` (Blocks etc.: sensors 1+2; Goaltends folder: 1+3).
 
-Writes ``outputs/close_calls_oof_predictions.csv``. Logistic mode also writes
-``outputs/close_calls_logistic_coefficients.csv``.
+Writes ``outputs/close_calls_oof_predictions.csv``, ``outputs/pooled_oof_predictions.csv``.
+Logistic mode also writes ``outputs/close_calls_logistic_coefficients.csv``.
 """
 
 from __future__ import annotations
@@ -33,16 +33,21 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    AdaBoostClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier
 
-from .close_call_cv import stratified_kfold_eval_close_calls
+from .close_call_cv import stratified_kfold_eval_close_calls, stratified_kfold_eval_pooled
 from .close_call_labels import load_usable_close_call_binary_labels
 from .fusion_features import extract_fusion_features
-from .paths import data_root, outputs_dir
+from .paths import data_root, labels_csv_path, outputs_dir
 from .sensor_io import discover_segmented_folders, estimate_fs, load_recording_csv, crop_peak_window
 
 DATA_ROOT = data_root()
@@ -50,7 +55,7 @@ OUTPUT_DIR = outputs_dir()
 WIN_SEC = float(os.environ.get("GOALTEND_WIN_SEC", "1.0"))
 NPERSEG = int(os.environ.get("GOALTEND_NPERSEG", "256"))
 SENSOR_1_ONLY = False
-LABELS_PATH = DATA_ROOT / "close_calls_labels.csv"
+LABELS_PATH = labels_csv_path()
 CLOSE_DIR = DATA_ROOT / "Close Calls"
 
 USE_SYNTHETIC_TRAINING = False
@@ -58,8 +63,8 @@ USE_SYNTHETIC_TRAINING = False
 CV_N_SPLITS = int(os.environ.get("GOALTEND_CC_CV_SPLITS", "5"))
 CV_RANDOM_STATE = 42
 
-# Default ``1``: train each CV fold using only labeled close calls (no Blocks/Goaltends segmented CSVs).
-TRAIN_CLOSE_ONLY = os.environ.get("GOALTEND_TRAIN_CLOSE_ONLY", "1").strip().lower() in (
+# Default ``0``: train each CV fold with segmented data + close-call training folds.
+TRAIN_CLOSE_ONLY = os.environ.get("GOALTEND_TRAIN_CLOSE_ONLY", "0").strip().lower() in (
     "1",
     "true",
     "yes",
@@ -93,9 +98,41 @@ LOGISTIC_PARAMS = dict(
     solver="lbfgs",
 )
 
+# League-office production classifier: tuned via ``adaboost_opt`` on close-call OOF (see README).
+GOALTEND_ADABOOST_RANDOM_STATE = int(os.environ.get("GOALTEND_ADABOOST_RANDOM_STATE", "133742"))
+ADA_CHAMPION_N_EST = int(os.environ.get("GOALTEND_ADA_N_ESTIMATORS", "275"))
+ADA_CHAMPION_LR = float(os.environ.get("GOALTEND_ADA_LEARNING_RATE", "1.155555391181257"))
+ADA_CHAMPION_TREE = dict(
+    max_depth=int(os.environ.get("GOALTEND_ADA_MAX_DEPTH", "3")),
+    min_samples_leaf=int(os.environ.get("GOALTEND_ADA_MIN_SAMPLES_LEAF", "4")),
+    min_samples_split=int(os.environ.get("GOALTEND_ADA_MIN_SAMPLES_SPLIT", "24")),
+    class_weight="balanced",
+    max_features=None,
+)
+
+
+def make_adaboost_champion_pipeline(random_state: int | None = None) -> Pipeline:
+    """StandardScaler + AdaBoost on shallow balanced trees (validated hyperparameters)."""
+    rs = GOALTEND_ADABOOST_RANDOM_STATE if random_state is None else int(random_state)
+    est = DecisionTreeClassifier(**{**ADA_CHAMPION_TREE, "random_state": rs + 101})
+    return Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "clf",
+                AdaBoostClassifier(
+                    estimator=est,
+                    n_estimators=ADA_CHAMPION_N_EST,
+                    learning_rate=ADA_CHAMPION_LR,
+                    random_state=rs,
+                ),
+            ),
+        ]
+    )
+
 
 def resolve_model_kind() -> str:
-    """One of ``logistic`` (default, interpretable), ``rf``, ``hgb``."""
+    """One of ``adaboost`` (default), ``logistic``, ``rf``, ``hgb``."""
     explicit = os.environ.get("GOALTEND_MODEL", "").strip().lower()
     if explicit in ("logistic", "lr", "linear"):
         return "logistic"
@@ -103,15 +140,19 @@ def resolve_model_kind() -> str:
         return "rf"
     if explicit in ("hgb", "hist_gradient_boosting", "gradient_boosting"):
         return "hgb"
+    if explicit in ("adaboost", "ada", "adaboost_champion"):
+        return "adaboost"
     if os.environ.get("GOALTEND_USE_RF", "").strip() in ("1", "true", "yes"):
         return "rf"
     if not explicit:
-        return "logistic"
-    return "logistic"
+        return "adaboost"
+    return "adaboost"
 
 
 def make_classifier_pipeline() -> Pipeline:
     kind = resolve_model_kind()
+    if kind == "adaboost":
+        return make_adaboost_champion_pipeline()
     if kind == "logistic":
         return Pipeline(
             [
@@ -195,9 +236,11 @@ def build_base_binary() -> tuple[pd.DataFrame, list[str]]:
         for csv_path in sorted(folder.glob("*.csv")):
             feat = _features_for_file(csv_path)
             feat["y"] = "goaltend" if label == "goaltends" else "legal"
+            feat["clip_id"] = csv_path.name
             rows.append(feat)
     df = pd.DataFrame(rows)
-    feat_cols = sorted([c for c in df.columns if c != "y"])
+    meta = {"y", "clip_id"}
+    feat_cols = sorted([c for c in df.columns if c not in meta])
     return df, feat_cols
 
 
@@ -261,10 +304,17 @@ def segmented_stratified_kfold_accuracy(
     }
 
 
+def _sanitize_feature_block(df: pd.DataFrame, feat_cols: list[str]) -> None:
+    raw = df[feat_cols].values.astype(np.float64)
+    df[feat_cols] = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+
+
 def run(rf_params: dict | None = None) -> dict:
     params = {**RF_PARAMS, **(rf_params or {})}
     df_base, feat_cols = build_base_binary()
     df_cc = build_usable_close_calls_df(feat_cols)
+    _sanitize_feature_block(df_base, feat_cols)
+    _sanitize_feature_block(df_cc, feat_cols)
 
     clf_template = make_classifier_pipeline()
     if TRAIN_CLOSE_ONLY:
@@ -321,17 +371,36 @@ def run(rf_params: dict | None = None) -> dict:
         random_state=CV_RANDOM_STATE,
     )
 
+    pooled = stratified_kfold_eval_pooled(
+        df_base,
+        df_cc,
+        feat_cols,
+        make_pipeline=make_classifier_pipeline,
+        n_splits=CV_N_SPLITS,
+        random_state=CV_RANDOM_STATE,
+    )
+
     kind = resolve_model_kind()
     if kind == "logistic":
         params_report = {**LOGISTIC_PARAMS, "model": "logistic"}
     elif kind == "rf":
         params_report = {**params, "model": "rf"}
+    elif kind == "adaboost":
+        params_report = {
+            "model": "adaboost",
+            **ADA_CHAMPION_TREE,
+            "n_estimators": ADA_CHAMPION_N_EST,
+            "learning_rate": ADA_CHAMPION_LR,
+            "random_state": GOALTEND_ADABOOST_RANDOM_STATE,
+        }
     else:
         params_report = {**HGB_PARAMS, "model": "hgb"}
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / "close_calls_oof_predictions.csv"
     cc_cv["oof_predictions_df"].to_csv(out_path, index=False)
+    pooled_path = OUTPUT_DIR / "pooled_oof_predictions.csv"
+    pooled["oof_predictions_df"].to_csv(pooled_path, index=False)
 
     coef_csv_path: str | None = None
     if kind == "logistic":
@@ -345,6 +414,13 @@ def run(rf_params: dict | None = None) -> dict:
 
     out = {
         "output_csv": str(out_path),
+        "pooled_output_csv": str(pooled_path),
+        "oof_accuracy_pooled": pooled["oof_accuracy_pooled"],
+        "oof_accuracy_pooled_segmented": pooled["oof_accuracy_segmented"],
+        "oof_accuracy_pooled_close_calls": pooled["oof_accuracy_close_calls"],
+        "pooled_fold_accuracies": pooled["fold_accuracies"],
+        "pooled_cv_n_splits_effective": pooled["cv_n_splits_effective"],
+        "pooled_oof_predictions_df": pooled["oof_predictions_df"],
         "params": params_report,
         "model_kind": kind,
         "coefficients_csv": coef_csv_path,
@@ -363,6 +439,7 @@ def run(rf_params: dict | None = None) -> dict:
         {
             "close_call_cv_n_splits_requested": cc_cv["cv_n_splits_requested"],
             "close_call_cv_n_splits_effective": cc_cv["cv_n_splits_effective"],
+            "pooled_cv_n_splits_requested": pooled["cv_n_splits_requested"],
         }
     )
     return out
@@ -419,4 +496,26 @@ if __name__ == "__main__":
             round(r["cv_std_accuracy"], 4),
         )
     print("Wrote:", r["output_csv"])
+    print("\n--- Pooled eval (segmented ∪ close calls, stratified OOF, no leakage) ---")
+    print("Wrote:", r["pooled_output_csv"])
+    print(
+        "Pooled CV splits (effective):",
+        r["pooled_cv_n_splits_effective"],
+        "(requested",
+        r["pooled_cv_n_splits_requested"],
+        ")",
+    )
+    print(
+        "Per-fold accuracy (pooled test folds):",
+        [round(x, 4) for x in r["pooled_fold_accuracies"]],
+    )
+    print("OOF accuracy — all pooled rows:", round(r["oof_accuracy_pooled"], 4))
+    print(
+        "OOF accuracy — segmented only:",
+        round(r["oof_accuracy_pooled_segmented"], 4),
+    )
+    print(
+        "OOF accuracy — close calls only (same labels as close-call CV):",
+        round(r["oof_accuracy_pooled_close_calls"], 4),
+    )
     print("\n" + Path(r["output_csv"]).read_text())

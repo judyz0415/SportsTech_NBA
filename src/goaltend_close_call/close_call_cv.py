@@ -2,12 +2,16 @@
 Stratified K-fold evaluation on close-call clips: each fold trains on either (a) all
 segmented rows plus close-call training folds, or (b) **only** close-call training folds
 when ``include_segmented=False``. The held-out fold is always close-call clips only (no leakage).
+
+``stratified_kfold_eval_pooled`` stratifies over **segmented ∪ close calls** so every row
+gets an out-of-fold prediction (honest pooled metric).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -140,6 +144,127 @@ def stratified_kfold_eval_close_calls(
         "n_close_calls_evaluated": len(df_cc),
         "n_segmented_train_side": len(df_seg) if include_segmented else 0,
         "include_segmented_in_train": include_segmented,
+    }
+
+
+def stratified_kfold_eval_pooled(
+    df_seg: pd.DataFrame,
+    df_cc: pd.DataFrame,
+    feat_cols: list[str],
+    *,
+    rf_params: dict | None = None,
+    make_pipeline: Callable[[], Pipeline] | None = None,
+    n_splits: int = 5,
+    random_state: int = 42,
+    y_col: str = "y",
+) -> dict[str, Any]:
+    """
+    Stratified K-fold on the **concatenation** of segmented and close-call rows.
+
+    Each fold fits on all rows outside the test fold and predicts only the held-out fold.
+    Returns overall OOF accuracy and OOF accuracy restricted to ``source == "segmented"``
+    or ``"close_call"``.
+    """
+    if df_seg.empty and df_cc.empty:
+        raise ValueError("Need at least one of df_seg or df_cc for pooled CV.")
+
+    seg = df_seg.copy()
+    cc = df_cc.copy()
+    seg["source"] = "segmented"
+    seg["clip_id"] = seg["clip_id"] if "clip_id" in seg.columns else seg.index.astype(str)
+    cc["source"] = "close_call"
+    if "filename" not in cc.columns:
+        raise ValueError("df_cc must include a filename column for pooled eval.")
+    cc["clip_id"] = cc["filename"]
+
+    combined = pd.concat([seg, cc], ignore_index=True)
+    X = combined[feat_cols].values.astype(np.float64, copy=False)
+    y = combined[y_col].values
+    src = combined["source"].values
+    clip_ids = combined["clip_id"].values.astype(str)
+
+    vc = pd.Series(y).value_counts()
+    min_class = int(vc.min())
+    if min_class < 2:
+        raise ValueError(
+            f"Pooled stratified CV needs at least 2 samples per class; counts: {vc.to_dict()}."
+        )
+    k = int(min(n_splits, min_class))
+    if k < 2:
+        raise ValueError(
+            f"Pooled stratified CV needs k >= 2; got min_class={min_class}, n={len(combined)}."
+        )
+
+    oof_pred = np.empty(len(combined), dtype=object)
+    oof_fold = np.full(len(combined), -1, dtype=np.int32)
+    p_goal = np.zeros(len(combined), dtype=np.float64)
+    p_leg = np.zeros(len(combined), dtype=np.float64)
+
+    cv = StratifiedKFold(n_splits=k, shuffle=True, random_state=random_state)
+
+    def _default_make_pipeline() -> Pipeline:
+        params = rf_params or {}
+        cv_clf_params = {**params, "n_jobs": 1}
+        return Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("clf", RandomForestClassifier(**cv_clf_params)),
+            ]
+        )
+
+    factory = make_pipeline or _default_make_pipeline
+    fold_acc: list[float] = []
+
+    for fold_id, (train_idx, test_idx) in enumerate(cv.split(np.zeros(len(combined)), y)):
+        pipe = factory()
+        pipe.fit(X[train_idx], y[train_idx])
+
+        X_te = X[test_idx]
+        y_te = y[test_idx]
+        pred = pipe.predict(X_te)
+        proba = pipe.predict_proba(X_te)
+        cls_list = list(pipe.named_steps["clf"].classes_)
+        i_goal = cls_list.index("goaltend") if "goaltend" in cls_list else 0
+        i_leg = cls_list.index("legal") if "legal" in cls_list else 1 - i_goal
+        fold_acc.append(float(np.mean(pred == y_te)))
+
+        for i_local, j_global in enumerate(test_idx):
+            oof_pred[j_global] = pred[i_local]
+            oof_fold[j_global] = fold_id
+            p_goal[j_global] = float(proba[i_local, i_goal])
+            p_leg[j_global] = float(proba[i_local, i_leg])
+
+    oof_correct = oof_pred == y
+    by_seg = src == "segmented"
+    by_cc = src == "close_call"
+
+    def _subset_acc(mask: np.ndarray) -> float:
+        if not np.any(mask):
+            return float("nan")
+        return float(np.mean(oof_correct[mask]))
+
+    out_df = pd.DataFrame(
+        {
+            "source": src,
+            "clip_id": clip_ids,
+            "fold_id": oof_fold,
+            y_col: y,
+            "predicted": oof_pred,
+            "P_goaltend": p_goal,
+            "P_legal": p_leg,
+            "correct": oof_correct,
+        }
+    )
+
+    return {
+        "cv_n_splits_requested": n_splits,
+        "cv_n_splits_effective": k,
+        "fold_accuracies": fold_acc,
+        "oof_accuracy_pooled": float(np.mean(oof_correct)),
+        "oof_accuracy_segmented": _subset_acc(by_seg),
+        "oof_accuracy_close_calls": _subset_acc(by_cc),
+        "oof_predictions_df": out_df,
+        "n_pooled": len(combined),
     }
 
 

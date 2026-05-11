@@ -1,8 +1,8 @@
 """
 Goaltend vs legal using **time-domain shape** features only (no STFT/FFT).
 
-Training pool (default): usable **labeled close calls only** (env ``GOALTEND_TRAIN_CLOSE_ONLY=0``
-to include segmented folders). Uses **physical sensor 1** only (``SENSOR_1_ONLY``).
+Training pool (default): **segmented + close-call folds** (``GOALTEND_TRAIN_CLOSE_ONLY=1`` for
+close-call-only training). Uses **physical sensor 1** only (``SENSOR_1_ONLY``).
 
 Evaluation: stratified K-fold on close calls; optional union with all segmented rows per fold.
 
@@ -20,7 +20,7 @@ import pandas as pd
 from .close_call_cv import stratified_kfold_eval_close_calls
 from .close_call_labels import load_usable_close_call_binary_labels
 from .close_call_model import segmented_stratified_kfold_accuracy
-from .paths import data_root, outputs_dir
+from .paths import data_root, labels_csv_path, outputs_dir
 from .sensor_io import discover_segmented_folders, estimate_fs, load_recording_csv, crop_peak_window
 from .shape_time_features import extract_shape_features
 
@@ -29,13 +29,13 @@ OUTPUT_DIR = outputs_dir()
 WIN_SEC = 1.0
 SENSOR_1_ONLY = True
 USE_SYNTHETIC_TRAINING = False
-LABELS_PATH = DATA_ROOT / "close_calls_labels.csv"
+LABELS_PATH = labels_csv_path()
 CLOSE_DIR = DATA_ROOT / "Close Calls"
 
 CV_N_SPLITS = int(os.environ.get("GOALTEND_CC_CV_SPLITS", "5"))
 CV_RANDOM_STATE = 42
 
-TRAIN_CLOSE_ONLY = os.environ.get("GOALTEND_TRAIN_CLOSE_ONLY", "1").strip().lower() in (
+TRAIN_CLOSE_ONLY = os.environ.get("GOALTEND_TRAIN_CLOSE_ONLY", "0").strip().lower() in (
     "1",
     "true",
     "yes",

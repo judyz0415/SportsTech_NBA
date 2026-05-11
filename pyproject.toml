@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+deep = [
+    "torch>=2.0,<3",
+]
 notebooks = [
     "matplotlib>=3.8",
     "seaborn>=0.13",

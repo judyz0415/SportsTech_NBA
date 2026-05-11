@@ -1,0 +1,20 @@
+{
+  "search_leader_by_oof_accuracy": {
+    "max_depth": 3,
+    "min_samples_leaf": 4,
+    "min_samples_split": 24,
+    "n_estimators": 275,
+    "learning_rate": 1.155555391181257,
+    "class_weight_tree": "balanced",
+    "max_features_tree": null,
+    "calibrate_sigmoid_inner_cv": false,
+    "oof_acc_05": 0.7415730337078652,
+    "oof_acc_thr_tuned": 0.7415730337078652,
+    "best_thresh": 0.5,
+    "seed_fold": 133742,
+    "verified_mean_acc05": 0.6816479400749064,
+    "verified_mean_thr": 0.7134831460674157,
+    "verified_acc05_scores": "0.71910;0.69663;0.64045;0.67416;0.71910;0.64045",
+    "verified_thr_scores": "0.74157;0.71910;0.69663;0.68539;0.74157;0.69663"
+  }
+}

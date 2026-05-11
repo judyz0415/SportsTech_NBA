@@ -19,3 +19,11 @@ def data_root() -> Path:
 def outputs_dir() -> Path:
     """Folder for prediction CSVs and other generated artifacts."""
     return Path(os.environ.get("GOALTEND_OUTPUT_DIR", project_root() / "outputs")).resolve()
+
+
+def labels_csv_path() -> Path:
+    """CSV listing close-call filenames and labels; override with ``GOALTEND_LABELS_PATH``."""
+    override = os.environ.get("GOALTEND_LABELS_PATH", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return data_root() / "close_calls_labels.csv"
