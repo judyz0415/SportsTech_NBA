@@ -12,7 +12,7 @@ def project_root() -> Path:
 
 
 def data_root() -> Path:
-    """Folder with ``* - Segmented`` directories, ``Close Calls/``, and ``close_calls_labels.csv``."""
+    """Folder with ``goaltends/``, ``legal contacts/``, label CSVs, and (legacy) ``* - Segmented`` trees."""
     return Path(os.environ.get("GOALTEND_DATA_DIR", project_root() / "data")).resolve()
 
 

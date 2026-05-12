@@ -83,6 +83,27 @@ def row_to_binary_label(
     return eyeballed_to_binary(_strip_cell(eyeballed_contact))
 
 
+def resolve_close_call_recording_path(data_root: Path | str, filename: str) -> Path | None:
+    """
+    Locate a close-call CSV under ``legal contacts/close_calls/`` or ``goaltends/close_calls/``,
+    or (legacy) ``Close Calls/``.
+    """
+    root = Path(data_root)
+    fn = str(filename).strip()
+    if not fn.endswith(".csv"):
+        fn = f"{fn}.csv"
+    leg = root / "legal contacts" / "close_calls" / fn
+    if leg.is_file():
+        return leg
+    gol = root / "goaltends" / "close_calls" / fn
+    if gol.is_file():
+        return gol
+    legacy = root / "Close Calls" / fn
+    if legacy.is_file():
+        return legacy
+    return None
+
+
 def load_labels_csv(path: Path | str) -> pd.DataFrame:
     """Read ``close_calls_labels.csv`` with flexible column names."""
     path = Path(path)
@@ -99,31 +120,32 @@ def load_labels_csv(path: Path | str) -> pd.DataFrame:
 
 def load_usable_close_call_binary_labels(
     labels_path: Path | str,
-    close_calls_dir: Path | str,
+    data_root: Path | str,
 ) -> pd.DataFrame:
     """
-    Rows with binary legal/goaltend labels and an existing CSV under ``close_calls_dir``.
+    Rows with binary legal/goaltend labels and an existing CSV resolved under ``data_root``
+    (``legal contacts/close_calls/``, ``goaltends/close_calls/``, or legacy ``Close Calls/``).
 
     Columns: filename, y (legal|goaltend), ground_truth_raw, eyeballed_contact, skip_reason (NaN if usable).
     """
-    root = Path(close_calls_dir)
+    root = Path(data_root)
     lab = load_labels_csv(labels_path)
     rows = []
     for _, r in lab.iterrows():
         fn = r["filename"]
         if not fn.endswith(".csv"):
             fn = f"{fn}.csv"
-        p = root / fn
+        p = resolve_close_call_recording_path(root, fn)
         y_bin, skip = row_to_binary_label(r.get("ground_truth"), r.get("eyeballed_contact"))
         rows.append(
             {
                 "filename": fn,
-                "path": str(p),
+                "path": str(p) if p is not None else str(root / "legal contacts" / "close_calls" / fn),
                 "y": y_bin,
                 "ground_truth_raw": _strip_cell(r.get("ground_truth")),
                 "eyeballed_contact": _strip_cell(r.get("eyeballed_contact")),
                 "skip_reason": skip if y_bin is None else None,
-                "file_exists": p.is_file(),
+                "file_exists": p is not None and p.is_file(),
             }
         )
     out = pd.DataFrame(rows)

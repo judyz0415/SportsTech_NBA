@@ -4,7 +4,7 @@ Goaltend vs legal model for close-call trials.
 **Architecture (fixed feature pipeline + interchangeable classifier)**
 
 1. **Input:** one CSV per clip → crop ~1 s window around peak acceleration → tri-axial
-   sensor streams per ``sensor_io`` (Blocks: sensors 1+2; Goaltends folders: 1+3).
+   sensor streams per ``sensor_io`` (legal reference + close calls: sensors 1+2; goaltend **reference** only: 1+3).
 2. **Features:** ``fusion_features.extract_fusion_features`` — spectrogram summaries on
    *direction-change* scalars (scale-free) **plus** prefixed ``shape_*`` time-domain cues
    (envelopes, peaks, cross-sensor lag/corr). Typically tens of scalar features.
@@ -21,7 +21,7 @@ Evaluation: **StratifiedK-fold OOF** on close calls; **pooled OOF** on segmented
 calls (every row gets a hold-out prediction); optional **coefficient CSV** for logistic
 (refit on all labeled close calls for interpretation — see ``run()``).
 
-Sensor conventions match ``sensor_io`` (Blocks etc.: sensors 1+2; Goaltends folder: 1+3).
+Sensor conventions match ``sensor_io`` (close calls and legal reference: 1+2; goaltend reference under ``goaltends/segmented/``: 1+3).
 
 Writes ``outputs/close_calls_oof_predictions.csv``, ``outputs/pooled_oof_predictions.csv``.
 Logistic mode also writes ``outputs/close_calls_logistic_coefficients.csv``.
@@ -58,7 +58,6 @@ WIN_SEC = float(os.environ.get("GOALTEND_WIN_SEC", "1.0"))
 NPERSEG = int(os.environ.get("GOALTEND_NPERSEG", "256"))
 SENSOR_1_ONLY = False
 LABELS_PATH = labels_csv_path()
-CLOSE_DIR = DATA_ROOT / "Close Calls"
 
 USE_SYNTHETIC_TRAINING = False
 
@@ -239,8 +238,6 @@ def _features_for_file(csv_path: Path) -> dict:
 def build_base_binary() -> tuple[pd.DataFrame, list[str]]:
     rows = []
     for folder, label in discover_segmented_folders(DATA_ROOT):
-        if folder.name == "Other Data - Segmented":
-            continue
         for csv_path in sorted(folder.glob("*.csv")):
             feat = _features_for_file(csv_path)
             feat["y"] = "goaltend" if label == "goaltends" else "legal"
@@ -254,7 +251,7 @@ def build_base_binary() -> tuple[pd.DataFrame, list[str]]:
 
 def build_usable_close_calls_df(feat_cols: list[str]) -> pd.DataFrame:
     """Feature rows for close-call CSVs that have usable binary labels."""
-    manifest = load_usable_close_call_binary_labels(LABELS_PATH, CLOSE_DIR)
+    manifest = load_usable_close_call_binary_labels(LABELS_PATH, DATA_ROOT)
     rows = []
     for _, r in manifest.iterrows():
         feat = _features_for_file(Path(r["path"]))

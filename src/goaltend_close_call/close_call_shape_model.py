@@ -30,7 +30,6 @@ WIN_SEC = 1.0
 SENSOR_1_ONLY = True
 USE_SYNTHETIC_TRAINING = False
 LABELS_PATH = labels_csv_path()
-CLOSE_DIR = DATA_ROOT / "Close Calls"
 
 CV_N_SPLITS = int(os.environ.get("GOALTEND_CC_CV_SPLITS", "5"))
 CV_RANDOM_STATE = 42
@@ -67,8 +66,6 @@ def _extract_shape_for_synthetic(t, a1, a2, fs: float) -> dict:
 def build_base_binary() -> tuple[pd.DataFrame, list[str]]:
     rows = []
     for folder, label in discover_segmented_folders(DATA_ROOT):
-        if folder.name == "Other Data - Segmented":
-            continue
         for csv_path in sorted(folder.glob("*.csv")):
             feat = _features_for_file(csv_path)
             feat["y"] = "goaltend" if label == "goaltends" else "legal"
@@ -79,7 +76,7 @@ def build_base_binary() -> tuple[pd.DataFrame, list[str]]:
 
 
 def build_usable_close_calls_df(feat_cols: list[str]) -> pd.DataFrame:
-    manifest = load_usable_close_call_binary_labels(LABELS_PATH, CLOSE_DIR)
+    manifest = load_usable_close_call_binary_labels(LABELS_PATH, DATA_ROOT)
     rows = []
     for _, r in manifest.iterrows():
         feat = _features_for_file(Path(r["path"]))

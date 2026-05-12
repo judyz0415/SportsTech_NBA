@@ -42,7 +42,6 @@ except ImportError as err:  # pragma: no cover
 
 DATA_ROOT = data_root()
 OUTPUT_DIR = outputs_dir()
-CLOSE_DIR = DATA_ROOT / "Close Calls"
 LABELS_PATH = labels_csv_path()
 
 WIN_SEC = float(os.environ.get("GOALTEND_WIN_SEC", "1.0"))
@@ -77,13 +76,11 @@ class ClipRow:
 def _iter_manifest() -> list[ClipRow]:
     rows: list[ClipRow] = []
     for folder, label in discover_segmented_folders(DATA_ROOT):
-        if folder.name == "Other Data - Segmented":
-            continue
         y = "goaltend" if label == "goaltends" else "legal"
         for p in sorted(folder.glob("*.csv")):
             rows.append(ClipRow(p, y, "segmented", p.name))
 
-    usable = load_usable_close_call_binary_labels(LABELS_PATH, CLOSE_DIR)
+    usable = load_usable_close_call_binary_labels(LABELS_PATH, DATA_ROOT)
     for _, r in usable.iterrows():
         rows.append(
             ClipRow(Path(r["path"]), str(r["y"]), "close_call", str(r["filename"]))
