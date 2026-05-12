@@ -136,7 +136,7 @@ High-level comparison (from project presentation materials). Latency figures are
 | Model | Pros | Cons | Use case |
 |-------|------|------|----------|
 | **Physics-based** | Easy to understand; simple | Noisy data → false positives | Reference / baseline for goaltending detection |
-| **AdaBoost** (this repo’s production path) | Fast — **under ~20 ms** to process and evaluate an unseen trial | Weakest on **very** close / borderline calls | Fast in-game detection paired with high-speed camera workflows |
+| **AdaBoost** (this repo’s production path) | Fast — **under ~20 ms** to process and evaluate an unseen trial | Weak on **very** close / borderline calls | Fast in-game detection paired with high-speed camera workflows |
 | **ROCKET + TabPFN** | Built-in confidence scores; **no retraining** needed on new tabular rows at inference | **~2.4 s** inference per trial in deck materials — too slow for strict real-time; less interpretable (“black box” vs hand-crafted features) | **Challenge / review:** officials or analysts trigger after a disputed call |
 
 ---
