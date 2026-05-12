@@ -129,20 +129,6 @@ For the **ROCKET + TabPFN** reference-only track, labels can be **shuffled** so 
 
 ---
 
-## Interpreting results for decision-makers
-
-1. **AdaBoost (production path).** The same materials report **82.6%** overall accuracy on all **190** clips under **strict pooled** holdout (“every row treated the same” per fold) and **100%** OOF on **obvious-call** clips, meaning mistakes concentrate on the hard subset, not on clear catalogue plays. **Do not** read the **~65%** close-call **slice** under strict pooled CV as the same number as **74.2%**; the protocols differ (see **Evaluation design**). This remains **decision-support**, not certification-ready automation.
-
-2. **ROCKET + TabPFN (presentation track).** Using the **full variable-length trace**, **ROCKET** features, and **TabPFN**, deck results used a stratified **80/20** holdout on the in-repo library and reported **~84.2%** accuracy evaluated on **190** clips, **ROC AUC ~0.94**, and **~85%** on **20** additional fully unseen recordings—useful for **generalization** discussion but **not** the same fold scheme as the AdaBoost close-call headline. Confidence matters: when max class probability was **≥ 0.75**, accuracy was **~96%** (**26/27**); below **0.75** it fell to **~55%** (**6/11**), i.e. near coin-flip—so **high-confidence** predictions are much more trustworthy than low-confidence ones in that analysis.
-
-3. **Probabilities** (`P_goaltend`, `P_legal` in AdaBoost CSVs; analogous scores from TabPFN) express **model confidence**, not officiating probability. The high/low confidence split above is why calibration (e.g. isotonic regression) matters if the League wants UI bands.
-
-4. **Sample size:** ~89 close calls is enough to **rank models** and catch gross failure, but confidence intervals on accuracy are non-trivial. Expanding labeled close calls will stabilize metrics.
-
-5. **Generalization:** TabPFN materials on **20 unseen** clips are encouraging but narrow; performance on new arenas, mounts, or export formats should still be **revalidated** before reliance in new contexts.
-
----
-
 ## Efficiency and accuracy tradeoffs
 
 High-level comparison (from project presentation materials). Latency figures are **order-of-magnitude** and depend on hardware and batching; treat as planning guidance, not SLAs.
