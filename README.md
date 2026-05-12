@@ -17,9 +17,9 @@ Two modeling tracks share the same data layout (`GOALTEND_DATA_DIR`) and sensor 
 |----------|--------|
 | **What does the tool output?** | For each clip: predicted class (**legal** vs **goaltend**) and class probabilities from cross-validated models. |
 | **What data does it use?** | (1) **Clean reference clips** under `data/goaltends/segmented/` and `data/legal contacts/{blocks,hand_on_backboard,...}/`. (2) **Labeled close-call trials** split into `data/goaltends/close_calls/` vs `data/legal contacts/close_calls/` using league-reviewed ground truth (e.g. `cleaned_ground_truth.csv`). |
-| **Primary accuracy metric (close calls)** | **~74%** out-of-fold on labeled **close-call** clips when each fold trains on **all** on-disk reference clips (101) plus other close calls—e.g. **74.2%** in presentation materials (~73% in some fresh repo runs; dependency-sensitive). |
+| **Primary accuracy metric (close calls)** | **~74%** out-of-fold on labeled **close-call** clips when each fold trains on **all** on-disk reference clips (101) plus other close calls. |
 | **Blended "all clips" metric** | **~82.6%** pooled OOF on **190** clips (strict stratified CV); the close-call **slice** in that pooled setup is often **~65%**. Deck materials pair that with **100%** on obvious-call clips and **74.2%** on close calls under the **full-reference** close-call protocol—same dataset, different question than the **~65%** pooled slice. See **Evaluation design**. |
-| **Court use** | Supportive analytics only, not a substitute for rules expertise, crew chief judgment, or official replay protocols. |
+| **Court use** | Supportive analytics only, not a substitute for official replay protocols. |
 
 ---
 
