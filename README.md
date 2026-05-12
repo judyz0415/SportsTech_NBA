@@ -162,6 +162,43 @@ PYTHONPATH=src python -m goaltend_close_call.close_call_model
 
 ---
 
+## Experimental: ROCKET + TabPFN (`goaltend_tabpfn`)
+
+A second modeling track applies **aeon ROCKET** embeddings + **TabPFN** (Hugging Face gated weights) to full six-channel variable-length segmented traces.
+
+**Setup:** TabPFN weights are gated — accept the licence at [Prior-Labs/TabPFN-v2-clf](https://huggingface.co/Prior-Labs/TabPFN-v2-clf), create a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), then:
+
+```bash
+pip install -e ".[tabpfn]"
+export HF_TOKEN=<your_token>
+```
+
+**Run:**
+
+```bash
+# Leave-one-out CV (default)
+python -m goaltend_tabpfn.goaltend_classify
+
+# Stratified 80/20 holdout
+python -m goaltend_tabpfn.goaltend_classify --holdout
+
+# Dedicated holdout + save fitted pipeline to outputs/fitted_tabpfn_pipeline.joblib
+python -m goaltend_tabpfn.goaltend_holdout
+
+# Predict unseen CSVs in data/test/ using the saved pipeline
+python -m goaltend_tabpfn.goaltend_holdout --test
+```
+
+**Inspect wrong or confidence-bucketed calls** (writes `filtered.csv`, `summary.txt`, `figures/*.png` under `outputs/tabpfn_analysis/`):
+
+```bash
+python -m goaltend_tabpfn.tabpfn_analysis --split loo --view wrong
+python -m goaltend_tabpfn.tabpfn_analysis --split loo --view confident_wrong --threshold 0.75
+python -m goaltend_tabpfn.tabpfn_analysis --split loo --view low_confidence --threshold 0.75
+```
+
+---
+
 ## Sensor conventions
 
 - **Non-goaltend** segmented CSVs: physical sensors **1 and 2** as `(a1, a2)`.
