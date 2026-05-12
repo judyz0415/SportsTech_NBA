@@ -6,7 +6,7 @@ Two modeling tracks share the same data layout (`GOALTEND_DATA_DIR`) and sensor 
 
 | Track | Package | Approach |
 |-------|---------|----------|
-| **Close-call AdaBoost** | `src/goaltend_close_call/` | Hand-crafted direction-change spectrograms + time-domain shape features fed into **AdaBoost** on class-balanced decision trees. Selected after a broad sklearn benchmark and hyperparameter search. Stratified K-fold CV on labeled close calls. |
+| **Close-call AdaBoost** | `src/goaltend_close_call/` | Direction-change spectrograms + time-domain shape features fed into **AdaBoost** on class-balanced decision trees. Selected after a broad sklearn benchmark and hyperparameter search. Stratified K-fold CV on labeled close calls. |
 | **ROCKET + TabPFN** | `src/goaltend_tabpfn/` | Full six-channel variable-length segmented traces fed into **aeon ROCKET** embeddings then **TabPFN** (HuggingFace gated weights). Leave-one-out and 80/20 holdout CV. Includes wrong-call analysis script. |
 
 ---
