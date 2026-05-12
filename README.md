@@ -17,8 +17,8 @@ Two modeling tracks share the same data layout (`GOALTEND_DATA_DIR`) and sensor 
 |----------|--------|
 | **What does the tool output?** | For each clip: predicted class (**legal** vs **goaltend**) and class probabilities from cross-validated models. |
 | **What data does it use?** | (1) **Clean reference clips** under `data/goaltends/segmented/` and `data/legal contacts/{blocks,hand_on_backboard,...}/`. (2) **Labeled close-call trials** split into `data/goaltends/close_calls/` vs `data/legal contacts/close_calls/` using league-reviewed ground truth (e.g. `cleaned_ground_truth.csv`). |
-| **Primary accuracy metric (close calls)** | **~73%** out-of-fold accuracy on labeled **close-call** clips when each fold is trained on **all** on-disk reference clips (101) plus other close calls, mirroring a deployment where the model can use the full reference library. |
-| **Blended "all clips" metric** | **~83%** pooled OOF (typical ~82.6-84%) on **190** rows (101 reference + 89 labeled close calls) with strict stratified cross-validation; reference clips are easier and pull this number up; close-call-only accuracy in that stricter protocol is lower (~65%). **These two numbers are not interchangeable** (see **Interpreting the metrics**). |
+| **Primary accuracy metric (close calls)** | **~74%** out-of-fold on labeled **close-call** clips when each fold trains on **all** on-disk reference clips (101) plus other close calls—e.g. **74.2%** in presentation materials (~73% in some fresh repo runs; dependency-sensitive). |
+| **Blended "all clips" metric** | **~82.6%** pooled OOF on **190** clips (strict stratified CV); the close-call **slice** in that pooled setup is often **~65%**. Deck materials pair that with **100%** on obvious-call clips and **74.2%** on close calls under the **full-reference** close-call protocol—same dataset, different question than the **~65%** pooled slice. See **Evaluation design**. |
 | **Court use** | Supportive analytics only, not a substitute for rules expertise, crew chief judgment, or official replay protocols. |
 
 ---
@@ -110,14 +110,14 @@ All reported accuracies use **cross-validation**: the model is **never** tested 
 
 This matches the practical question: if we keep a large labeled reference library, how often do we get the close call right?
 
-**Observed** (cleaned ground truth, ~89 usable close calls, 5 folds, 101-reference library including ball-on-rim): close-call OOF for the champion AdaBoost is **~73%** in a fresh run (exact value depends slightly on dependency versions; run locally to reproduce).
+**Observed** (cleaned ground truth, ~89 usable close calls, 5 folds, 101-reference library including ball-on-rim): close-call OOF for the champion AdaBoost is typically **~73–74%** (e.g. **74.2%** in presentation deck materials; exact value varies slightly with dependencies—run locally to reproduce).
 
 ### B. Pooled protocol (strict: "every row treated the same")
 
 - Concatenate **reference + close-call** rows (190 with the default library: 101 reference + 89 usable close calls).
 - Stratified K-fold on **all** 190 rows; each fold trains on ~80% of both pools.
 
-**Observed:** pooled OOF ~82.6% (reproducible with current AdaBoost + sklearn 1.3+ on 190 rows); reference-only slice ~98%; close-call slice ~65%, because the model no longer always has the **full** reference library in training for every fold. Slightly higher figures (~83.7%) have been seen with the same protocol when the reference mix or dependency versions differed slightly.
+**Observed:** pooled OOF **~82.6%** (matches presentation “overall on 190 clips”); reference-only slice often **~98%** in repo runs; close-call **slice** in this strict protocol **~65%**, because the model no longer always has the **full** reference library in training for every fold. Slightly higher pooled figures (~83.7%) have been seen when the reference mix or dependency versions differed slightly.
 
 **Do not** compare pooled headline accuracy to close-call headline accuracy as "improvement." They answer different operational questions.
 
@@ -131,13 +131,27 @@ For the **ROCKET + TabPFN** reference-only track, labels can be **shuffled** so 
 
 ## Interpreting results for decision-makers
 
-1. **Close-call OOF (~73% with the full 101-reference library)** means roughly **three in four** reviewed borderline clips are classified correctly under CV, when the model may use the **entire** reference library during training. Errors are still material: this is a **decision-support** statistic, not certification-ready automation.
+1. **AdaBoost (production path).** With the **full 101-reference library** in every training fold and CV on **~89** labeled close calls, presentation materials report **74.2%** close-call OOF—about **three in four** borderline clips correct under that deployment-like setup (some fresh repo runs land nearer **~73%**). The same materials report **82.6%** overall accuracy on all **190** clips under **strict pooled** holdout (“every row treated the same” per fold) and **100%** OOF on **obvious-call** clips, meaning mistakes concentrate on the hard subset, not on clear catalogue plays. **Do not** read the **~65%** close-call **slice** under strict pooled CV as the same number as **74.2%**; the protocols differ (see **Evaluation design**). This remains **decision-support**, not certification-ready automation.
 
-2. **Probabilities** (`P_goaltend`, `P_legal` in output CSVs) express **model confidence**, not officiating probability. Calibration can be improved (e.g. isotonic regression) if the League wants probability bands for UI.
+2. **ROCKET + TabPFN (presentation track).** Using the **full variable-length trace**, **ROCKET** features, and **TabPFN**, deck results used a stratified **80/20** holdout on the in-repo library and reported **~84.2%** accuracy evaluated on **190** clips, **ROC AUC ~0.94**, and **~85%** on **20** additional fully unseen recordings—useful for **generalization** discussion but **not** the same fold scheme as the AdaBoost close-call headline. Confidence matters: when max class probability was **≥ 0.75**, accuracy was **~96%** (**26/27**); below **0.75** it fell to **~55%** (**6/11**), i.e. near coin-flip—so **high-confidence** predictions are much more trustworthy than low-confidence ones in that analysis.
 
-3. **Sample size:** ~89 close calls is enough to **rank models** and catch gross failure, but confidence intervals on accuracy are non-trivial. Expanding labeled close calls will stabilize metrics.
+3. **Probabilities** (`P_goaltend`, `P_legal` in AdaBoost CSVs; analogous scores from TabPFN) express **model confidence**, not officiating probability. The high/low confidence split above is why calibration (e.g. isotonic regression) matters if the League wants UI bands.
 
-4. **Generalization:** Performance on new arenas, mounts, or export formats should be revalidated before reliance in new contexts.
+4. **Sample size:** ~89 close calls is enough to **rank models** and catch gross failure, but confidence intervals on accuracy are non-trivial. Expanding labeled close calls will stabilize metrics.
+
+5. **Generalization:** TabPFN materials on **20 unseen** clips are encouraging but narrow; performance on new arenas, mounts, or export formats should still be **revalidated** before reliance in new contexts.
+
+---
+
+## Efficiency and accuracy tradeoffs
+
+High-level comparison (from project presentation materials). Latency figures are **order-of-magnitude** and depend on hardware and batching; treat as planning guidance, not SLAs.
+
+| Model | Pros | Cons | Use case |
+|-------|------|------|----------|
+| **Physics-based** | Easy to understand; simple | Noisy data → false positives | Reference / baseline for goaltending detection |
+| **AdaBoost** (this repo’s production path) | Fast — **under ~20 ms** to process and evaluate an unseen trial | Weakest on **very** close / borderline calls | Fast in-game detection paired with high-speed camera workflows |
+| **ROCKET + TabPFN** | Built-in confidence scores; **no retraining** needed on new tabular rows at inference | **~2.4 s** inference per trial in deck materials — too slow for strict real-time; less interpretable (“black box” vs hand-crafted features) | **Challenge / review:** officials or analysts trigger after a disputed call |
 
 ---
 
