@@ -4,8 +4,8 @@ Load backboard accelerometer CSVs: two-sensor format (sensor2 axes Z,Y,X in file
 **Default (legal classes, etc.):** returns tri-axial data for **physical sensors 1 and 2**
 as ``(a1, a2)``.
 
-**Goaltends folder:** returns **physical sensors 1 and 3** as ``(a1, a2)`` so the pipeline
-still sees two triples; only the mount selection changes.
+**Goaltends reference folder** (`goaltends/segmented/`, or legacy ``Goaltends - Segmented``): returns **physical sensors 1 and 3** as ``(a1, a2)`` so the pipeline
+still sees two triples; only the mount selection changes. **Close-call** CSVs (including those labeled goaltend) use **sensors 1 and 2** like other two-sensor exports.
 
 Axes are always aligned to XYZ via column names.
 """
@@ -55,7 +55,17 @@ def _stack_sensor_xyz(m: dict[tuple[int, int], str], df: pd.DataFrame, sens_0bas
 
 
 def _goaltend_folder_uses_sensors_13(path: Path) -> bool:
-    """Goaltend exports use physical sensors 1+3 as the two channels for modeling."""
+    """
+    Obvious goaltend **reference** exports use physical sensors 1+3.
+
+    Marginal close-call CSVs stay on the two-sensor (1+2) layout even when labeled goaltend,
+    so only ``goaltends/segmented/`` (and legacy ``*Goaltends*Segmented`` folders) select 1+3.
+    """
+    parts_lower = [p.lower() for p in path.parts]
+    if "goaltends" in parts_lower:
+        i = parts_lower.index("goaltends")
+        nxt = parts_lower[i + 1] if i + 1 < len(parts_lower) else ""
+        return nxt == "segmented"
     return "goaltend" in path.parent.name.lower()
 
 
@@ -69,8 +79,9 @@ def load_recording_csv(
     ``a2`` is a zero array of the same shape (callers should pass ``sensor_1_only``
     into ``crop_peak_window`` / feature extractors so ``a2`` is ignored).
 
-    Otherwise: for files under a *goaltends* folder, ``a1``/``a2`` are **physical sensors 1 and 3**.
-    Otherwise they are **physical sensors 1 and 2**.
+    Otherwise: for files under ``goaltends/segmented/`` (or legacy *goaltends* segmented folders),
+    ``a1``/``a2`` are **physical sensors 1 and 3**. All other CSVs (including marginal close calls)
+    use **physical sensors 1 and 2**.
 
     Uses Latest accelerometer columns only (ignores FFT columns).
     """
@@ -159,16 +170,33 @@ def crop_peak_window(
 
 
 def discover_segmented_folders(data_root: str | Path) -> list[tuple[Path, str]]:
-    """Return (folder_path, canonical_label) for each *Segmented folder."""
+    """
+    Return ``(folder_path, canonical_label)`` for each **reference** class folder.
+
+    New layout: ``legal contacts/{blocks,hand_on_backboard,...}/`` (excludes
+    ``close_calls``) and ``goaltends/segmented/``. Legacy layout: directories whose
+    names contain ``Segmented``.
+    """
     root = Path(data_root)
-    out: list[tuple[Path, str]] = []
+    legal = root / "legal contacts"
+    goal_seg = root / "goaltends" / "segmented"
+    if legal.is_dir() or goal_seg.is_dir():
+        out: list[tuple[Path, str]] = []
+        if goal_seg.is_dir():
+            out.append((goal_seg, "goaltends"))
+        if legal.is_dir():
+            for sub in sorted(legal.iterdir()):
+                if sub.is_dir() and sub.name != "close_calls":
+                    out.append((sub, sub.name))
+        return out
+    out_legacy: list[tuple[Path, str]] = []
     for p in sorted(root.iterdir()):
         if not p.is_dir() or "Segmented" not in p.name:
             continue
         name = p.name.replace(" - Segmented", "").strip()
         key = name.lower().replace(" ", "_")
-        out.append((p, key))
-    return out
+        out_legacy.append((p, key))
+    return out_legacy
 
 
 if __name__ == "__main__":
@@ -177,10 +205,16 @@ if __name__ == "__main__":
     from .paths import data_root
 
     root = data_root()
-    legal = next((root / "Blocks - Segmented").glob("*.csv"), None)
-    goal = next((root / "Goaltends - Segmented").glob("*.csv"), None)
+    legal_dir = root / "legal contacts" / "blocks"
+    if not legal_dir.is_dir():
+        legal_dir = root / "Blocks - Segmented"
+    goal_dir = root / "goaltends" / "segmented"
+    if not goal_dir.is_dir():
+        goal_dir = root / "Goaltends - Segmented"
+    legal = next(legal_dir.glob("*.csv"), None)
+    goal = next(goal_dir.glob("*.csv"), None)
     if legal is None or goal is None:
-        print("Could not find sample CSVs under data/Blocks or data/Goaltends.", file=sys.stderr)
+        print("Could not find sample legal/goaltend reference CSVs under data/.", file=sys.stderr)
         sys.exit(1)
     t1, a1, a2 = load_recording_csv(legal)
     print(f"Legal sample: {legal.name}")

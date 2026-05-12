@@ -13,9 +13,9 @@ This package turns **tri-axial backboard accelerometer** recordings into a **bin
 | Question | Answer |
 |----------|--------|
 | **What does the tool output?** | For each clip: predicted class (**legal** vs **goaltend**) and class probabilities from cross-validated models. |
-| **What data does it use?** | (1) **Clean reference clips** from segmented folders (clear legal vs goaltend examples). (2) **Labeled close-call trials** from `Close Calls/` with league-reviewed ground truth (e.g. `cleaned_ground_truth.csv`). |
-| **Primary accuracy metric (close calls)** | **~74%** out-of-fold accuracy on labeled **close-call** clips when each fold is trained on **all** reference segmented clips plus other close calls—mirroring a deployment where the model can use the full reference library. |
-| **Blended “all clips” metric** | **~84%** when every clip (reference + close call) is evaluated with strict pooled cross-validation; reference clips are easier and pull this number up; close-call-only accuracy in *that* stricter protocol is lower (~65%). **These two numbers are not interchangeable** (see **Interpreting the metrics**). |
+| **What data does it use?** | (1) **Clean reference clips** under `data/goaltends/segmented/` and `data/legal contacts/{blocks,hand_on_backboard,...}/`. (2) **Labeled close-call trials** split into `data/goaltends/close_calls/` vs `data/legal contacts/close_calls/` using league-reviewed ground truth (e.g. `cleaned_ground_truth.csv`). |
+| **Primary accuracy metric (close calls)** | **~73%** out-of-fold accuracy on labeled **close-call** clips when each fold is trained on **all** on-disk reference clips (101) plus other close calls—mirroring a deployment where the model can use the full reference library. |
+| **Blended “all clips” metric** | **~83%** pooled OOF (typical **~82.6–84%**) on **190** rows (101 reference + 89 labeled close calls) with strict stratified cross-validation; reference clips are easier and pull this number up; close-call-only accuracy in *that* stricter protocol is lower (~65%). **These two numbers are not interchangeable** (see **Interpreting the metrics**). |
 | **Court use** | Supportive analytics only—not a substitute for rules expertise, crew chief judgment, or official replay protocols. |
 
 ---
@@ -25,7 +25,7 @@ This package turns **tri-axial backboard accelerometer** recordings into a **bin
 | Path | Purpose |
 |------|---------|
 | `src/goaltend_close_call/` | Package: ingestion (`sensor_io`), features (`fusion_features`, `shape_time_features`), **main model** (`close_call_model`), CV utilities (`close_call_cv`), labels (`close_call_labels`) |
-| `data/` | Segmented class folders, `Close Calls/`, label CSVs (`close_calls_labels.csv`, `cleaned_ground_truth.csv`, …) |
+| `data/` | `goaltends/` and `legal contacts/` trees (reference + close-call CSVs), label CSVs (`close_calls_labels.csv`, `cleaned_ground_truth.csv`, …) |
 | `outputs/` | Generated OOF prediction CSVs (typically gitignored except `.gitkeep`) |
 | `notebooks/` | Exploratory analysis |
 | `syncing_video_data/` | Video / IMU alignment utilities (separate from classification) |
@@ -38,7 +38,7 @@ This package turns **tri-axial backboard accelerometer** recordings into a **bin
 
 Each CSV provides **Latest** tri-axial acceleration for one or two mounted sensors. The pipeline:
 
-- Loads **sensor 1 + sensor 2** for standard (e.g. blocks) folders, and **sensor 1 + sensor 3** for **Goaltends** exports so both channels represent comparable backboard physics (`sensor_io.load_recording_csv`).
+- Loads **sensor 1 + sensor 2** for standard and close-call clips, and **sensor 1 + sensor 3** only for **goaltend reference** exports under `goaltends/segmented/` (legacy: `Goaltends - Segmented`) so both channels represent comparable backboard physics where that mount layout exists (`sensor_io.load_recording_csv`).
 - **Crops ~1 s** centered on the **peak** combined acceleration magnitude so each clip highlights the contact window (`crop_peak_window`).
 
 ### 2. Features (hand-crafted, interpretable family)
@@ -79,22 +79,22 @@ All reported accuracies use **cross-validation**: the model is **never** tested 
 
 This matches the practical question: *If we keep a large labeled reference library, how often do we get the close call right?*
 
-**Observed (cleaned ground truth, ~89 usable close calls, 5 folds):** **~74%** OOF accuracy for the champion AdaBoost (exact value depends slightly on seed; run locally to reproduce).
+**Observed (cleaned ground truth, ~89 usable close calls, 5 folds, 101-reference library including ball-on-rim):** close-call OOF for the champion AdaBoost is **~73%** in a fresh run (exact value depends slightly on dependency versions; run locally to reproduce).
 
 ### B. Pooled protocol (strict “every row treated the same”)
 
-- Concatenate **reference + close-call** rows.
-- Stratified K-fold on **all** 190 clips; each fold trains on ~80% of **both** pools.
+- Concatenate **reference + close-call** rows (**190** with the default library: 101 reference + 89 usable close calls).
+- Stratified K-fold on **all** 190 rows; each fold trains on ~80% of **both** pools.
 
-**Observed:** **~84%** overall; **reference-only slice ~100%** in that run; **close-call slice ~65%**—because the model no longer always has the **full** reference library in training for every fold.
+**Observed:** pooled OOF **~82.6%** (reproducible with current AdaBoost + sklearn 1.3+ on 190 rows); **reference-only slice ~98%**; **close-call slice ~65%**—because the model no longer always has the **full** reference library in training for every fold. Slightly higher figures (~83.7%) have been seen with the same protocol when the reference mix or dependency versions differed slightly.
 
-**Important:** **Do not** compare 84% to 74% as “improvement.” They answer different operational questions.
+**Important:** **Do not** compare pooled headline accuracy to close-call headline accuracy as “improvement.” They answer different operational questions.
 
 ---
 
 ## Interpreting results for decision-makers
 
-1. **Close-call ~74%** means roughly **three in four** reviewed borderline clips are classified correctly **under CV**, when the model may use the **entire** reference library during training. Errors are still material: this is a **decision-support** statistic, not certification-ready automation.
+1. **Close-call OOF (~73% with the full 101-reference library)** means roughly **three in four** reviewed borderline clips are classified correctly **under CV**, when the model may use the **entire** reference library during training. Errors are still material: this is a **decision-support** statistic, not certification-ready automation.
 
 2. **Probabilities** (`P_goaltend`, `P_legal` in output CSVs) express **model confidence**, not officiating probability. Calibration can be improved (e.g. isotonic regression) if the League wants probability bands for UI.
 
@@ -137,7 +137,7 @@ PYTHONPATH=src python -m goaltend_close_call.close_call_model
 
 | Variable | Default | Role |
 |----------|---------|------|
-| `GOALTEND_DATA_DIR` | `<repo>/data` | Data root (segmented folders, `Close Calls/`) |
+| `GOALTEND_DATA_DIR` | `<repo>/data` | Data root (`goaltends/`, `legal contacts/`; legacy flat `Close Calls/` is still resolved if present) |
 | `GOALTEND_LABELS_PATH` | `<data>/close_calls_labels.csv` | Label CSV (`GOALTEND_LABELS_PATH` overrides filename) |
 | `GOALTEND_OUTPUT_DIR` | `<repo>/outputs` | Prediction CSV output directory |
 | `GOALTEND_MODEL` | `adaboost` | `adaboost` (default), `logistic`, `hgb`, `rf` |
@@ -165,7 +165,7 @@ PYTHONPATH=src python -m goaltend_close_call.close_call_model
 ## Sensor conventions
 
 - **Non-goaltend** segmented CSVs: physical sensors **1 and 2** as `(a1, a2)`.
-- **Goaltends - Segmented** files: physical sensors **1 and 3** as `(a1, a2)` (`sensor_io.load_recording_csv`).
+- **Paths under `goaltends/segmented/`** (and legacy goaltend reference folders): physical sensors **1 and 3** as `(a1, a2)`. **Close-call** CSVs under `goaltends/close_calls/` or `legal contacts/close_calls/` use **sensors 1 and 2** (`sensor_io.load_recording_csv`).
 
 ---
 

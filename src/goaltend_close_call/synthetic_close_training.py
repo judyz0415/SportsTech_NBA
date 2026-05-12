@@ -38,8 +38,6 @@ def iter_segmented_labeled_paths(data_root: str | Path) -> Iterator[tuple[Path, 
     """(csv_path, y) with y in {\"goaltend\", \"legal\"}."""
     root = Path(data_root)
     for folder, label in discover_segmented_folders(root):
-        if folder.name == "Other Data - Segmented":
-            continue
         y = "goaltend" if label == "goaltends" else "legal"
         for csv_path in sorted(folder.glob("*.csv")):
             yield csv_path, y

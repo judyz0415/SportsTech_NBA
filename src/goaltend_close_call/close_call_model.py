@@ -4,7 +4,7 @@ Goaltend vs legal model for close-call trials.
 **Architecture (fixed feature pipeline + interchangeable classifier)**
 
 1. **Input:** one CSV per clip → crop ~1 s window around peak acceleration → tri-axial
-   sensor streams per ``sensor_io`` (Blocks: sensors 1+2; Goaltends folders: 1+3).
+   sensor streams per ``sensor_io`` (legal reference + close calls: sensors 1+2; goaltend **reference** only: 1+3).
 2. **Features:** ``fusion_features.extract_fusion_features`` — spectrogram summaries on
    *direction-change* scalars (scale-free) **plus** prefixed ``shape_*`` time-domain cues
    (envelopes, peaks, cross-sensor lag/corr). Typically tens of scalar features.
@@ -14,12 +14,14 @@ Goaltend vs legal model for close-call trials.
 
 Training pool (default): **segmented + close-call folds per CV** (set ``GOALTEND_TRAIN_CLOSE_ONLY=1``
 to use **only** labeled close calls in each fold; no segmented union).
+Set ``GOALTEND_CC_CV_TRAIN_SEGMENTED_ONLY=1`` to train close-call CV on **segmented reference only**
+(no close-call rows in the fit — transfer-learning stress test).
 
 Evaluation: **StratifiedK-fold OOF** on close calls; **pooled OOF** on segmented ∪ close
 calls (every row gets a hold-out prediction); optional **coefficient CSV** for logistic
 (refit on all labeled close calls for interpretation — see ``run()``).
 
-Sensor conventions match ``sensor_io`` (Blocks etc.: sensors 1+2; Goaltends folder: 1+3).
+Sensor conventions match ``sensor_io`` (close calls and legal reference: 1+2; goaltend reference under ``goaltends/segmented/``: 1+3).
 
 Writes ``outputs/close_calls_oof_predictions.csv``, ``outputs/pooled_oof_predictions.csv``.
 Logistic mode also writes ``outputs/close_calls_logistic_coefficients.csv``.
@@ -56,7 +58,6 @@ WIN_SEC = float(os.environ.get("GOALTEND_WIN_SEC", "1.0"))
 NPERSEG = int(os.environ.get("GOALTEND_NPERSEG", "256"))
 SENSOR_1_ONLY = False
 LABELS_PATH = labels_csv_path()
-CLOSE_DIR = DATA_ROOT / "Close Calls"
 
 USE_SYNTHETIC_TRAINING = False
 
@@ -64,11 +65,17 @@ CV_N_SPLITS = int(os.environ.get("GOALTEND_CC_CV_SPLITS", "5"))
 CV_RANDOM_STATE = 42
 
 # Default ``0``: train each CV fold with segmented data + close-call training folds.
+# ``1``: train each fold with **only** labeled close calls (no segmented union).
 TRAIN_CLOSE_ONLY = os.environ.get("GOALTEND_TRAIN_CLOSE_ONLY", "0").strip().lower() in (
     "1",
     "true",
     "yes",
 )
+
+# ``1``: close-call CV trains on **segmented / obvious reference only** (no close calls in fit).
+TRAIN_SEGMENTED_ONLY = os.environ.get(
+    "GOALTEND_CC_CV_TRAIN_SEGMENTED_ONLY", "0"
+).strip().lower() in ("1", "true", "yes")
 
 # Hist gradient boosting: stronger regularization + class balancing for segmented→close-call shift.
 HGB_PARAMS = dict(
@@ -231,8 +238,6 @@ def _features_for_file(csv_path: Path) -> dict:
 def build_base_binary() -> tuple[pd.DataFrame, list[str]]:
     rows = []
     for folder, label in discover_segmented_folders(DATA_ROOT):
-        if folder.name == "Other Data - Segmented":
-            continue
         for csv_path in sorted(folder.glob("*.csv")):
             feat = _features_for_file(csv_path)
             feat["y"] = "goaltend" if label == "goaltends" else "legal"
@@ -246,7 +251,7 @@ def build_base_binary() -> tuple[pd.DataFrame, list[str]]:
 
 def build_usable_close_calls_df(feat_cols: list[str]) -> pd.DataFrame:
     """Feature rows for close-call CSVs that have usable binary labels."""
-    manifest = load_usable_close_call_binary_labels(LABELS_PATH, CLOSE_DIR)
+    manifest = load_usable_close_call_binary_labels(LABELS_PATH, DATA_ROOT)
     rows = []
     for _, r in manifest.iterrows():
         feat = _features_for_file(Path(r["path"]))
@@ -311,13 +316,18 @@ def _sanitize_feature_block(df: pd.DataFrame, feat_cols: list[str]) -> None:
 
 def run(rf_params: dict | None = None) -> dict:
     params = {**RF_PARAMS, **(rf_params or {})}
+    if TRAIN_CLOSE_ONLY and TRAIN_SEGMENTED_ONLY:
+        raise ValueError(
+            "Use only one of GOALTEND_TRAIN_CLOSE_ONLY or GOALTEND_CC_CV_TRAIN_SEGMENTED_ONLY."
+        )
+
     df_base, feat_cols = build_base_binary()
     df_cc = build_usable_close_calls_df(feat_cols)
     _sanitize_feature_block(df_base, feat_cols)
     _sanitize_feature_block(df_cc, feat_cols)
 
     clf_template = make_classifier_pipeline()
-    if TRAIN_CLOSE_ONLY:
+    if TRAIN_CLOSE_ONLY or TRAIN_SEGMENTED_ONLY:
         cv_summary_seg = {
             "cv_n_splits_requested": CV_N_SPLITS,
             "cv_n_splits_effective": 0,
@@ -361,15 +371,28 @@ def run(rf_params: dict | None = None) -> dict:
 
     seg_side = df_base.iloc[0:0] if TRAIN_CLOSE_ONLY else df_train
 
-    cc_cv = stratified_kfold_eval_close_calls(
-        seg_side,
-        df_cc,
-        feat_cols,
-        make_pipeline=make_classifier_pipeline,
-        include_segmented=not TRAIN_CLOSE_ONLY,
-        n_splits=CV_N_SPLITS,
-        random_state=CV_RANDOM_STATE,
-    )
+    if TRAIN_SEGMENTED_ONLY:
+        cc_cv = stratified_kfold_eval_close_calls(
+            df_base,
+            df_cc,
+            feat_cols,
+            make_pipeline=make_classifier_pipeline,
+            include_segmented=True,
+            train_segmented_only=True,
+            n_splits=CV_N_SPLITS,
+            random_state=CV_RANDOM_STATE,
+        )
+    else:
+        cc_cv = stratified_kfold_eval_close_calls(
+            seg_side,
+            df_cc,
+            feat_cols,
+            make_pipeline=make_classifier_pipeline,
+            include_segmented=not TRAIN_CLOSE_ONLY,
+            train_segmented_only=False,
+            n_splits=CV_N_SPLITS,
+            random_state=CV_RANDOM_STATE,
+        )
 
     pooled = stratified_kfold_eval_pooled(
         df_base,
@@ -432,6 +455,7 @@ def run(rf_params: dict | None = None) -> dict:
         "close_call_cv_splits_effective": cc_cv["cv_n_splits_effective"],
         "oof_predictions_df": cc_cv["oof_predictions_df"],
         "train_close_calls_only": TRAIN_CLOSE_ONLY,
+        "train_segmented_only": TRAIN_SEGMENTED_ONLY,
         "include_segmented_in_train": cc_cv["include_segmented_in_train"],
     }
     out.update(cv_summary_seg)
@@ -453,9 +477,13 @@ if __name__ == "__main__":
         print("Interpretability (coef refit on all labeled close calls):", r["coefficients_csv"])
     print(
         "Training mode:",
-        "labeled close calls only"
-        if r["train_close_calls_only"]
-        else "segmented (+ optional synth) + close-call folds",
+        "close-call CV: train on segmented reference ONLY (no close calls in fit)"
+        if r.get("train_segmented_only")
+        else (
+            "labeled close calls only"
+            if r["train_close_calls_only"]
+            else "segmented (+ optional synth) + close-call folds"
+        ),
     )
     print(
         "Training rows — segmented:",
@@ -481,7 +509,13 @@ if __name__ == "__main__":
         round(r["oof_accuracy_close_calls"], 4),
     )
     if r.get("segmented_cv_skipped"):
-        print("Stratified CV on segmented: skipped (training uses close calls only)")
+        if r.get("train_segmented_only"):
+            print(
+                "Stratified CV on segmented only: skipped "
+                "(close-call CV already trains on segmented-only folds)."
+            )
+        else:
+            print("Stratified CV on segmented: skipped (training uses close calls only)")
     else:
         print(
             "Stratified CV on segmented only —",

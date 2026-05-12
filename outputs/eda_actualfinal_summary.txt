@@ -1,0 +1,33 @@
+=== 10ft_final_actualfinal_13 (legal, double-hit block) vs _37 (goaltend) ===
+shape_mag2_n_peaks: 13=13  37=1  Δ=-12  legal_train_mean=13.7667  GT_train_mean=17.39
+shape_magsum_n_peaks: 13=12  37=1  Δ=-11  legal_train_mean=13.8111  GT_train_mean=17.38
+shape_mag1_n_peaks: 13=10  37=6  Δ=-4  legal_train_mean=12.9889  GT_train_mean=16.91
+shape_mag2_double_peak_prom: 13=0.962338  37=0  Δ=-0.962338  legal_train_mean=0.585688  GT_train_mean=0.621086
+shape_mag2_sec_to_pri_ratio: 13=0.889257  37=0  Δ=-0.889257  legal_train_mean=0.789891  GT_train_mean=0.840324
+shape_magsum_sec_to_pri_ratio: 13=0.853524  37=0  Δ=-0.853524  legal_train_mean=0.816034  GT_train_mean=0.869781
+shape_mag2_third_to_pri_ratio: 13=0.784494  37=0  Δ=-0.784494  legal_train_mean=0.744107  GT_train_mean=0.793624
+shape_magsum_third_to_pri_ratio: 13=0.776283  37=0  Δ=-0.776283  legal_train_mean=0.755137  GT_train_mean=0.82922
+shape_magsum_double_peak_prom: 13=0.739297  37=0  Δ=-0.739297  legal_train_mean=0.616921  GT_train_mean=0.659594
+shape_magsum_first_peak_rel_pos: 13=0.500835  37=0  Δ=-0.500835  legal_train_mean=0.271167  GT_train_mean=0.384746
+shape_mag2_first_peak_rel_pos: 13=0.48581  37=0  Δ=-0.48581  legal_train_mean=0.273989  GT_train_mean=0.40305
+shape_mag1_third_to_pri_ratio: 13=0.606518  37=0.999012  Δ=0.392495  legal_train_mean=0.681575  GT_train_mean=0.779276
+shape_mag1_double_peak_prom: 13=0.655184  37=0.975081  Δ=0.319896  legal_train_mean=0.624625  GT_train_mean=0.647732
+shape_mag1_top2_peak_time_sep: 13=0.0434057  37=0.283806  Δ=0.240401  legal_train_mean=0.0482004  GT_train_mean=0.062026
+shape_mag1_sec_to_pri_ratio: 13=0.770692  37=0.999729  Δ=0.229037  legal_train_mean=0.775171  GT_train_mean=0.836204
+
+=== False goaltend on legal blocks (holdout): files ===
+['10ft_final_actualfinal_21.csv', '10ft_final_actualfinal_30.csv', '10ft_final_actualfinal_39.csv', '10ft_final_actualfinal_40.csv']
+
+=== Mean multi-peak-related features: FP legal->goaltend vs TN legal->legal ===
+shape_mag1_double_peak_prom: FP_mean=0.471418  TN_mean=0.49666  n_fp=4 n_tn=9
+shape_mag1_n_peaks: FP_mean=10  TN_mean=9.88889  n_fp=4 n_tn=9
+shape_mag1_sec_to_pri_ratio: FP_mean=0.622131  TN_mean=0.660445  n_fp=4 n_tn=9
+shape_mag1_top2_peak_time_sep: FP_mean=0.0421536  TN_mean=0.0591727  n_fp=4 n_tn=9
+shape_mag2_double_peak_prom: FP_mean=0.776449  TN_mean=0.608639  n_fp=4 n_tn=9
+shape_mag2_n_peaks: FP_mean=10.75  TN_mean=10.1111  n_fp=4 n_tn=9
+shape_mag2_sec_to_pri_ratio: FP_mean=0.870124  TN_mean=0.729482  n_fp=4 n_tn=9
+shape_mag2_top2_peak_time_sep: FP_mean=0.0605175  TN_mean=0.0332035  n_fp=4 n_tn=9
+shape_magsum_double_peak_prom: FP_mean=0.605402  TN_mean=0.578273  n_fp=4 n_tn=9
+shape_magsum_n_peaks: FP_mean=10.5  TN_mean=9.44444  n_fp=4 n_tn=9
+shape_magsum_sec_to_pri_ratio: FP_mean=0.682936  TN_mean=0.70346  n_fp=4 n_tn=9
+shape_magsum_top2_peak_time_sep: FP_mean=0.0267112  TN_mean=0.0454461  n_fp=4 n_tn=9
