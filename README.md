@@ -1,14 +1,17 @@
-# Backboard accelerometer: goaltend vs. legal (close-call support)
+# NBA goaltend — backboard IMU ML
 
-This package turns **tri-axial backboard accelerometer** recordings into a **binary assist** for reviewers: *legal block / contact* versus *goaltend*, with emphasis on **marginal (“close”) plays** where video alone is ambiguous.
+Portfolio repository for supervised learning on **backboard-mounted accelerometers** applied to NBA-style goaltend detection. Tri-axial acceleration recordings are used to classify plays as **legal block / contact** vs **goaltend**, with particular emphasis on **marginal (“close”) plays** where video alone is ambiguous.
 
-**Production classifier:** **AdaBoost** on shallow, class-balanced decision trees, trained on **engineered motion features** (spectral shape of direction-change signals plus time-domain shape cues). It was selected after a broad model sweep and a focused hyperparameter search; see **Methodology** and **Results**.
+Two modeling tracks share the same data layout (`GOALTEND_DATA_DIR`) and sensor ingestion layer:
 
-**Audience note:** This document is written for **basketball operations and replay-center stakeholders** (e.g. NBA League Office). It states what the system does, how it is evaluated, and how to interpret the numbers—without assuming a machine-learning background.
+| Track | Package | Approach |
+|-------|---------|----------|
+| **Close-call AdaBoost** | `src/goaltend_close_call/` | Hand-crafted direction-change spectrograms + time-domain shape features → **AdaBoost** on class-balanced decision trees. Selected after a broad sklearn benchmark and hyperparameter search. Stratified K-fold CV on labeled close calls. |
+| **ROCKET + TabPFN** | `src/goaltend_tabpfn/` | Full six-channel variable-length segmented traces → **aeon ROCKET** embeddings → **TabPFN** (HuggingFace gated weights). Leave-one-out and 80/20 holdout CV. Includes wrong-call analysis script. |
 
 ---
 
-## Executive summary
+## Executive summary (close-call AdaBoost track)
 
 | Question | Answer |
 |----------|--------|
@@ -24,10 +27,12 @@ This package turns **tri-axial backboard accelerometer** recordings into a **bin
 
 | Path | Purpose |
 |------|---------|
-| `src/goaltend_close_call/` | Package: ingestion (`sensor_io`), features (`fusion_features`, `shape_time_features`), **main model** (`close_call_model`), CV utilities (`close_call_cv`), labels (`close_call_labels`) |
+| `src/goaltend_close_call/` | Ingestion (`sensor_io`), features (`fusion_features`, `shape_time_features`), **AdaBoost model** (`close_call_model`), CV utilities (`close_call_cv`), labels (`close_call_labels`), hyperparameter search (`adaboost_opt`), model benchmark (`close_call_benchmark`) |
+| `src/goaltend_tabpfn/` | ROCKET + TabPFN pipeline: LOO/holdout classification (`goaltend_classify`, `goaltend_holdout`), wrong-call analysis (`tabpfn_analysis`) |
 | `data/` | `goaltends/` and `legal contacts/` trees (reference + close-call CSVs), label CSVs (`close_calls_labels.csv`, `cleaned_ground_truth.csv`, …) |
-| `outputs/` | Generated OOF prediction CSVs (typically gitignored except `.gitkeep`) |
-| `notebooks/` | Exploratory analysis |
+| `outputs/` | Generated OOF prediction CSVs, AdaBoost params, benchmark results (typically gitignored except `.gitkeep`) |
+| `notebooks/` | Exploratory analysis (spectrogram, sensor visualization) |
+| `scripts/` | Data layout utilities (`reorganize_data_layout.py`) |
 | `syncing_video_data/` | Video / IMU alignment utilities (separate from classification) |
 
 ---
