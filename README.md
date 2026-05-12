@@ -28,12 +28,12 @@ Two modeling tracks share the same data layout (`GOALTEND_DATA_DIR`) and sensor 
 | Path | Purpose |
 |------|---------|
 | `src/goaltend_close_call/` | Ingestion (`sensor_io`), features (`fusion_features`, `shape_time_features`), **AdaBoost model** (`close_call_model`), CV utilities (`close_call_cv`), labels (`close_call_labels`), hyperparameter search (`adaboost_opt`), model benchmark (`close_call_benchmark`) |
-| `src/goaltend_tabpfn/` | ROCKET + TabPFN pipeline: LOO/holdout classification (`goaltend_classify`, `goaltend_holdout`), wrong-call analysis (`tabpfn_analysis`) |
+| `src/goaltend_tabpfn/` | ROCKET + TabPFN: see **TabPFN track scripts** below (`goaltend_classify`, `goaltend_holdout`, `tabpfn_analysis`, `tabpfn_label_null`) |
 | `data/` | `goaltends/` and `legal contacts/` trees (reference + close-call CSVs), label CSVs (`close_calls_labels.csv`, `cleaned_ground_truth.csv`, ...) |
 | `outputs/` | Generated OOF prediction CSVs, AdaBoost params, benchmark results (typically gitignored except `.gitkeep`) |
 | `notebooks/` | Exploratory analysis (spectrogram, sensor visualization) |
 | `scripts/` | Data layout utilities (`reorganize_data_layout.py`) |
-| `syncing_video_data/` | Video / IMU alignment utilities (separate from classification) |
+| `syncing_video_data/` | Video / IMU alignment and overlays (see `syncing_video_data/README.md`; separate from ML classification) |
 
 ---
 
@@ -121,6 +121,12 @@ This matches the practical question: if we keep a large labeled reference librar
 
 **Do not** compare pooled headline accuracy to close-call headline accuracy as "improvement." They answer different operational questions.
 
+### TabPFN track: permuted-label null (ROC AUC ≈ chance)
+
+For the **ROCKET + TabPFN** reference-only track, labels can be **shuffled** so they no longer match each CSV’s IMU trace. Under the same protocol (LOO or stratified 80/20 holdout), **ROC AUC should collapse to ~0.5**; accuracy should sit near a random / majority baseline. That is a quick guard against accidental **label** misalignment or a broken metric path. It is a **complementary** check alongside proper CV—not a full leakage audit (e.g. feature-level or group leakage still needs fold design and domain review).
+
+**Script:** `python -m goaltend_tabpfn.tabpfn_label_null` (default `--split holdout` for speed; use `--split loo` to mirror full leave-one-out). Optional `--n-perm N` repeats with seeds `seed`, `seed+1`, … and prints mean ± std of ROC AUC. The evaluator accepts injected labels via `y_override` in `goaltend_classify.evaluate_goaltend` / `evaluate_goaltend_holdout`.
+
 ---
 
 ## Interpreting results for decision-makers
@@ -195,6 +201,15 @@ PYTHONPATH=src python -m goaltend_close_call.close_call_model
 
 ## ROCKET + TabPFN track (`goaltend_tabpfn`)
 
+**TabPFN track scripts** (all under `src/goaltend_tabpfn/`, run as `python -m goaltend_tabpfn.<module>`):
+
+| Module | Role |
+|--------|------|
+| `goaltend_classify` | Main LOO run (default) or `--holdout` 80/20; optional timestamped report under `outputs/tabpfn_runs/` |
+| `goaltend_holdout` | Fit full train split, save `outputs/fitted_tabpfn_pipeline.joblib`; `--test` for `data/test/` |
+| `tabpfn_analysis` | Wrong-call / confidence views + IMU plots → `outputs/tabpfn_analysis/` |
+| `tabpfn_label_null` | Permuted labels vs traces → ROC AUC ~0.5 sanity check |
+
 **Setup:** TabPFN weights are gated on HuggingFace. Accept the licence at [Prior-Labs/TabPFN-v2-clf](https://huggingface.co/Prior-Labs/TabPFN-v2-clf), create a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), then:
 
 ```bash
@@ -210,6 +225,9 @@ python -m goaltend_tabpfn.goaltend_classify
 
 # Stratified 80/20 holdout
 python -m goaltend_tabpfn.goaltend_classify --holdout
+
+# Permuted labels (expect ROC AUC ~0.5); default holdout is fast
+python -m goaltend_tabpfn.tabpfn_label_null --split holdout --seed 0
 
 # Dedicated holdout + save fitted pipeline to outputs/fitted_tabpfn_pipeline.joblib
 python -m goaltend_tabpfn.goaltend_holdout

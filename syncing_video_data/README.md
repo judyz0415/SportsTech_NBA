@@ -1,8 +1,16 @@
 # SportsTech_NBA — video / IMU sync
 
-Scripts to overlay accelerometer traces on basketball video (`code.py`, `code2.py` — one pair per dataset), **`overlay_imu_on_video.py`** (CLI — use with arbitrary folders such as HighFrameVideos), and to scrub frame-by-frame for release labeling (`videoFrameNavigator.py`).
+**Scripts in this folder**
 
-Place matching `.mov` / `.csv` files beside the script you run, or edit the paths at the top of each overlay script.
+| File | Purpose |
+|------|---------|
+| `overlay_imu_on_video.py` | **Preferred** CLI: overlay IMU on arbitrary video/CSV paths (median removal, peak alignment, MP4 out) |
+| `videoFrameNavigator.py` | Frame-by-frame scrubbing; writes `<video>_release_frames.txt` |
+| `visualize_imu_z_axis.py` | Quick Z-axis / CSV inspection |
+| `code.py`, `code2.py` | Legacy pair-specific overlay flows (paths edited per dataset) |
+| `presentation_videos/` | Mike sync helpers (`sync_mike_video*.py`) and `explore_imu_csv.py` |
+
+Place matching `.mov` / `.csv` files beside the script you run, or pass absolute paths (see examples below). For `code.py` / `code2.py`, edit the paths at the top of each script.
 
 Video outputs and `.mov` inputs are ignored by git (see repo root `.gitignore`).
 

@@ -3,6 +3,13 @@ goaltend_classify.py
 --------------------
 ROCKET + TabPFN time-series classification for goaltend detection.
 
+Related entry points in this package (``python -m goaltend_tabpfn.<module>``):
+
+- **goaltend_classify** — LOO (default) or ``--holdout`` stratified 80/20; optional reports.
+- **goaltend_holdout** — fit full pipeline, save ``fitted_tabpfn_pipeline.joblib``; ``--test``.
+- **tabpfn_analysis** — wrong-call / confidence buckets + IMU plots.
+- **tabpfn_label_null** — permute labels; expect ROC AUC ≈ 0.5 (sanity check).
+
 Dataset layout (expected under ``GOALTEND_DATA_DIR``, default ``<repo>/data``):
     Ball on Rim - Segmented/        → label "legal"
     Blocks - Segmented/             → label "legal"
@@ -226,10 +233,11 @@ def plot_sample(csv_path: Path, label: str, pred: str | None = None) -> None:
 
 def evaluate_goaltend(
     *,
-    data_dir:  Path = DATA_DIR,
-    n_groups:  int  = N_GROUPS,
-    n_kernels: int  = N_KERNELS,
-    device:    str  = "auto",
+    data_dir:   Path = DATA_DIR,
+    n_groups:   int  = N_GROUPS,
+    n_kernels:  int  = N_KERNELS,
+    device:     str  = "auto",
+    y_override: np.ndarray | None = None,
 ) -> dict:
     """Run ROCKET + TabPFN leave-one-out cross-validation on the goaltend dataset.
 
@@ -241,7 +249,10 @@ def evaluate_goaltend(
     data_dir  : root directory containing the class sub-folders
     n_groups  : number of independent ROCKET+TabPFN ensembles averaged per iteration
     n_kernels : number of ROCKET convolutional kernels per group
-    device    : TabPFN compute device ("auto", "cpu", "cuda", "mps")
+    device     : TabPFN compute device ("auto", "cpu", "cuda", "mps")
+    y_override : if set, use these labels instead of folder-derived labels
+        (same length and order as ``load_goaltend_dataset``). Used for null
+        checks (e.g. permuted labels → ROC AUC ≈ 0.5).
 
     Returns
     -------
@@ -250,7 +261,15 @@ def evaluate_goaltend(
     from aeon.transformations.collection.convolution_based import Rocket
     from tabpfn import TabPFNClassifier
 
-    raw_samples, y, paths = load_goaltend_dataset(data_dir)
+    raw_samples, y_disk, paths = load_goaltend_dataset(data_dir)
+    if y_override is not None:
+        y = np.asarray(y_override)
+        if y.shape[0] != len(raw_samples):
+            raise ValueError(
+                f"y_override length {y.shape[0]} != n_samples {len(raw_samples)}."
+            )
+    else:
+        y = y_disk
 
     unique_classes = np.unique(y)
     if len(unique_classes) < 2:
@@ -597,12 +616,13 @@ def holdout_predictions_table(
 
 def evaluate_goaltend_holdout(
     *,
-    data_dir:   Path  = DATA_DIR,
-    n_groups:   int   = N_GROUPS,
-    n_kernels:  int   = N_KERNELS,
-    test_size:  float = 0.2,
+    data_dir:    Path  = DATA_DIR,
+    n_groups:    int   = N_GROUPS,
+    n_kernels:   int   = N_KERNELS,
+    test_size:   float = 0.2,
     random_state: int = 42,
-    device:     str   = "auto",
+    device:      str   = "auto",
+    y_override:  np.ndarray | None = None,
 ) -> dict:
     """Single stratified train/test split (default 80/20) with ROCKET + TabPFN.
 
@@ -610,6 +630,7 @@ def evaluate_goaltend_holdout(
     ----------
     test_size     : fraction of data held out for testing (default 0.2 = 20 %)
     random_state  : seed for the split (change to get a different split)
+    y_override    : optional label vector (see ``evaluate_goaltend``).
 
     Returns
     -------
@@ -619,7 +640,15 @@ def evaluate_goaltend_holdout(
     from sklearn.model_selection import train_test_split
     from tabpfn import TabPFNClassifier
 
-    raw_samples, y, paths = load_goaltend_dataset(data_dir)
+    raw_samples, y_disk, paths = load_goaltend_dataset(data_dir)
+    if y_override is not None:
+        y = np.asarray(y_override)
+        if y.shape[0] != len(raw_samples):
+            raise ValueError(
+                f"y_override length {y.shape[0]} != n_samples {len(raw_samples)}."
+            )
+    else:
+        y = y_disk
 
     unique_classes = np.unique(y)
     if len(unique_classes) < 2:
