@@ -27,10 +27,10 @@ Two modeling tracks share the same data layout (`GOALTEND_DATA_DIR`) and sensor 
 
 | Path | Purpose |
 |------|---------|
-| `src/goaltend_close_call/` | Ingestion (`sensor_io`), features (`fusion_features`, `shape_time_features`), **AdaBoost model** (`close_call_model`), CV utilities (`close_call_cv`), labels (`close_call_labels`), hyperparameter search (`adaboost_opt`), model benchmark (`close_call_benchmark`) |
+| `src/goaltend_close_call/` | **`sensors`** (CSV load, crop), **`spectrogram`** / **`shape`** (frequency- and time-domain features), **`fusion`** (combines both), **`model`** (AdaBoost + CV), **`labels`**, **`cv`**, **`paths`** |
 | `src/goaltend_tabpfn/` | ROCKET + TabPFN: see **TabPFN track scripts** below (`goaltend_classify`, `goaltend_holdout`, `tabpfn_analysis`, `tabpfn_label_null`) |
 | `data/` | `goaltends/` and `legal contacts/` trees (reference + close-call CSVs), label CSVs (`close_calls_labels.csv`, `cleaned_ground_truth.csv`, ...) |
-| `outputs/` | Generated OOF prediction CSVs, AdaBoost params, benchmark results (typically gitignored except `.gitkeep`) |
+| `outputs/` | Generated OOF prediction CSVs (typically gitignored except `.gitkeep`) |
 | `notebooks/` | Exploratory analysis (spectrogram, sensor visualization) |
 | `scripts/` | Data layout utilities (`reorganize_data_layout.py`) |
 | `syncing_video_data/` | Video / IMU alignment and overlays (see `syncing_video_data/README.md`; separate from ML classification) |
@@ -43,12 +43,12 @@ Two modeling tracks share the same data layout (`GOALTEND_DATA_DIR`) and sensor 
 
 Each CSV provides **Latest** tri-axial acceleration for one or two mounted sensors. The pipeline:
 
-- Loads **sensor 1 + sensor 2** for standard and close-call clips, and **sensor 1 + sensor 3** only for **goaltend reference** exports under `goaltends/segmented/` (legacy: `Goaltends - Segmented`) so both channels represent comparable backboard physics where that mount layout exists (`sensor_io.load_recording_csv`).
+- Loads **sensor 1 + sensor 2** for standard and close-call clips, and **sensor 1 + sensor 3** only for **goaltend reference** exports under `goaltends/segmented/` (legacy: `Goaltends - Segmented`) so both channels represent comparable backboard physics where that mount layout exists (`sensors.load_recording_csv`).
 - **Crops ~1 s** centered on the **peak** combined acceleration magnitude so each clip highlights the contact window (`crop_peak_window`).
 
 ### 2. Features (hand-crafted, interpretable family)
 
-Rather than feeding raw waveforms into a black box, the **default production path** uses **fusion features** (`extract_fusion_features`):
+Rather than feeding raw waveforms into a black box, the **default production path** uses **`fusion.extract_fusion_features`** (STFT summaries on direction-change signals plus prefixed **`shape_*`** time-domain cues):
 
 - **Direction-change spectrograms:** Acceleration vectors are **unit-normalized** so overall "hard vs soft" hit size is not the dominant cue; the model uses **how the direction of the acceleration vector evolves** and summaries of its **frequency content** (centroid, band energy, rolloff, etc.).
 - **Shape_* time-domain cues:** Peak structure on **normalized** magnitude envelopes, symmetry, cross-sensor lag / correlation, capturing **timing and pulse shape** of the event.
@@ -59,14 +59,14 @@ The design intent is to approximate **kinematic patterns** of rim/backboard resp
 
 ### 3. Classifier: AdaBoost (champion)
 
-**AdaBoost** combines many **weak** decision trees (here: shallow trees with **class-balanced** weighting). It performed best on **close-call** evaluation among a wide sklearn benchmark (logistic regression, random forests, gradient boosting, k-NN, neural nets, etc.) and was further tuned with `adaboost_opt.py` (random search over tree depth, leaf sizes, number of estimators, learning rate).
+**AdaBoost** combines many **weak** decision trees (here: shallow trees with **class-balanced** weighting). It was selected after comparing several sklearn baselines and was tuned with a focused random search over tree depth, leaf sizes, number of estimators, and learning rate.
 
-Hyperparameters are centralized in `close_call_model.py` (env overrides prefixed with `GOALTEND_ADA_*` and `GOALTEND_ADABOOST_RANDOM_STATE`).
+Hyperparameters are centralized in `model.py` (env overrides prefixed with `GOALTEND_ADA_*` and `GOALTEND_ADABOOST_RANDOM_STATE`).
 
 ### 4. Labels
 
 - **Reference (segmented) clips:** Folder names encode **legal** vs **goaltend** supervision.
-- **Close calls:** Rows need a **filename** and a binary **ground truth** (`legal` / `block` vs `goaltend`). Ambiguous rows are skipped (`close_call_labels.py`).
+- **Close calls:** Rows need a **filename** and a binary **ground truth** (`legal` / `block` vs `goaltend`). Ambiguous rows are skipped (`labels.py`).
 
 Use `GOALTEND_LABELS_PATH` to point at the active label file (e.g. `data/cleaned_ground_truth.csv`).
 
@@ -158,7 +158,7 @@ From `nba-goaltend-project/` with `src` on `PYTHONPATH`:
 
 ```bash
 export GOALTEND_LABELS_PATH="$PWD/data/cleaned_ground_truth.csv"   # or your label file
-PYTHONPATH=src python -m goaltend_close_call.close_call_model
+PYTHONPATH=src python -m goaltend_close_call.model
 ```
 
 **Outputs:**
@@ -181,21 +181,8 @@ PYTHONPATH=src python -m goaltend_close_call.close_call_model
 | `GOALTEND_TRAIN_CLOSE_ONLY` | `0` | `0` = include all segmented reference clips in each training fold; `1` = close calls only |
 | `GOALTEND_CC_CV_SPLITS` | `5` | Stratified fold count (capped by class counts) |
 | `GOALTEND_ADABOOST_RANDOM_STATE` | `133742` | RNG for champion AdaBoost (reproducibility) |
-| `GOALTEND_ADA_*` | see `close_call_model.py` | Optional overrides for tree depth, `n_estimators`, `learning_rate`, etc. |
+| `GOALTEND_ADA_*` | see `model.py` | Optional overrides for tree depth, `n_estimators`, `learning_rate`, etc. |
 | `GOALTEND_WIN_SEC`, `GOALTEND_NPERSEG` | `1.0`, `256` | Crop window length; STFT length for direction-change features |
-
----
-
-## Hyperparameter search (optional)
-
-- **`python -m goaltend_close_call.adaboost_opt`** - random search over AdaBoost / tree settings; writes `outputs/adaboost_random_search_trials.csv` and `outputs/adaboost_best_params.json`.
-- **`python -m goaltend_close_call.close_call_benchmark`** - compares many sklearn models on the **close-call** protocol; writes `outputs/close_call_model_benchmark.csv`.
-
----
-
-## Experimental: deep sequence model
-
-`deep_sequence_model.py` (requires `pip install -e ".[deep]"`) is a **CNN on raw windows** for research comparison. It is **not** the production path.
 
 ---
 
@@ -256,7 +243,7 @@ Use `--split holdout` to run the same views on the stratified holdout test split
 ## Sensor conventions
 
 - **Non-goaltend** segmented CSVs: physical sensors **1 and 2** as `(a1, a2)`.
-- **Paths under `goaltends/segmented/`** (and legacy goaltend reference folders): physical sensors **1 and 3** as `(a1, a2)`. **Close-call** CSVs under `goaltends/close_calls/` or `legal contacts/close_calls/` use **sensors 1 and 2** (`sensor_io.load_recording_csv`).
+- **Paths under `goaltends/segmented/`** (and legacy goaltend reference folders): physical sensors **1 and 3** as `(a1, a2)`. **Close-call** CSVs under `goaltends/close_calls/` or `legal contacts/close_calls/` use **sensors 1 and 2** (`sensors.load_recording_csv`).
 
 ---
 

@@ -17,9 +17,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-deep = [
-    "torch>=2.0,<3",
-]
 tabpfn = [
     "aeon>=0.7,<1",
     "matplotlib>=3.8",

@@ -4,8 +4,8 @@ Goaltend vs legal model for close-call trials.
 **Architecture (fixed feature pipeline + interchangeable classifier)**
 
 1. **Input:** one CSV per clip → crop ~1 s window around peak acceleration → tri-axial
-   sensor streams per ``sensor_io`` (legal reference + close calls: sensors 1+2; goaltend **reference** only: 1+3).
-2. **Features:** ``fusion_features.extract_fusion_features`` — spectrogram summaries on
+   sensor streams per ``sensors`` (legal reference + close calls: sensors 1+2; goaltend **reference** only: 1+3).
+2. **Features:** ``fusion.extract_fusion_features`` — spectrogram summaries on
    *direction-change* scalars (scale-free) **plus** prefixed ``shape_*`` time-domain cues
    (envelopes, peaks, cross-sensor lag/corr). Typically tens of scalar features.
 3. **Transform:** ``StandardScaler`` fit on each CV training fold (zero mean / unit var per feature).
@@ -21,7 +21,7 @@ Evaluation: **StratifiedK-fold OOF** on close calls; **pooled OOF** on segmented
 calls (every row gets a hold-out prediction); optional **coefficient CSV** for logistic
 (refit on all labeled close calls for interpretation — see ``run()``).
 
-Sensor conventions match ``sensor_io`` (close calls and legal reference: 1+2; goaltend reference under ``goaltends/segmented/``: 1+3).
+Sensor conventions match ``sensors`` (close calls and legal reference: 1+2; goaltend reference under ``goaltends/segmented/``: 1+3).
 
 Writes ``outputs/close_calls_oof_predictions.csv``, ``outputs/pooled_oof_predictions.csv``.
 Logistic mode also writes ``outputs/close_calls_logistic_coefficients.csv``.
@@ -46,11 +46,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 
-from .close_call_cv import stratified_kfold_eval_close_calls, stratified_kfold_eval_pooled
-from .close_call_labels import load_usable_close_call_binary_labels
-from .fusion_features import extract_fusion_features
+from .cv import stratified_kfold_eval_close_calls, stratified_kfold_eval_pooled
+from .labels import load_usable_close_call_binary_labels
+from .fusion import extract_fusion_features
 from .paths import data_root, labels_csv_path, outputs_dir
-from .sensor_io import discover_segmented_folders, estimate_fs, load_recording_csv, crop_peak_window
+from .sensors import discover_reference_folders, estimate_fs, load_recording_csv, crop_peak_window
 
 DATA_ROOT = data_root()
 OUTPUT_DIR = outputs_dir()
@@ -58,8 +58,6 @@ WIN_SEC = float(os.environ.get("GOALTEND_WIN_SEC", "1.0"))
 NPERSEG = int(os.environ.get("GOALTEND_NPERSEG", "256"))
 SENSOR_1_ONLY = False
 LABELS_PATH = labels_csv_path()
-
-USE_SYNTHETIC_TRAINING = False
 
 CV_N_SPLITS = int(os.environ.get("GOALTEND_CC_CV_SPLITS", "5"))
 CV_RANDOM_STATE = 42
@@ -105,7 +103,7 @@ LOGISTIC_PARAMS = dict(
     solver="lbfgs",
 )
 
-# League-office production classifier: tuned via ``adaboost_opt`` on close-call OOF (see README).
+# League-office production classifier: tuned via random search on close-call OOF (see README).
 GOALTEND_ADABOOST_RANDOM_STATE = int(os.environ.get("GOALTEND_ADABOOST_RANDOM_STATE", "133742"))
 ADA_CHAMPION_N_EST = int(os.environ.get("GOALTEND_ADA_N_ESTIMATORS", "275"))
 ADA_CHAMPION_LR = float(os.environ.get("GOALTEND_ADA_LEARNING_RATE", "1.155555391181257"))
@@ -237,7 +235,7 @@ def _features_for_file(csv_path: Path) -> dict:
 
 def build_base_binary() -> tuple[pd.DataFrame, list[str]]:
     rows = []
-    for folder, label in discover_segmented_folders(DATA_ROOT):
+    for folder, label in discover_reference_folders(DATA_ROOT):
         for csv_path in sorted(folder.glob("*.csv")):
             feat = _features_for_file(csv_path)
             feat["y"] = "goaltend" if label == "goaltends" else "legal"
@@ -342,32 +340,6 @@ def run(rf_params: dict | None = None) -> dict:
         )
 
     df_train = df_base
-    n_synth = 0
-    if USE_SYNTHETIC_TRAINING and not TRAIN_CLOSE_ONLY:
-        from .synthetic_close_training import (
-            SYNTHETIC_AUGMENTS_PER_SOURCE_FILE,
-            build_synthetic_feature_rows,
-        )
-
-        def _extract_synth(t, a1, a2, fs: float) -> dict:
-            return extract_fusion_features(
-                t, a1, a2, fs=fs, nperseg=NPERSEG, sensor_1_only=SENSOR_1_ONLY
-            )
-
-        df_syn = build_synthetic_feature_rows(
-            DATA_ROOT,
-            _extract_synth,
-            augments_per_file=SYNTHETIC_AUGMENTS_PER_SOURCE_FILE,
-            win_sec=WIN_SEC,
-            sensor_1_only=SENSOR_1_ONLY,
-            rng=np.random.default_rng(42),
-        )
-        for c in feat_cols:
-            if c not in df_syn.columns:
-                df_syn[c] = 0.0
-        df_syn = df_syn[feat_cols + ["y"]]
-        df_train = pd.concat([df_train, df_syn], ignore_index=True)
-        n_synth = len(df_syn)
 
     seg_side = df_base.iloc[0:0] if TRAIN_CLOSE_ONLY else df_train
 
@@ -448,7 +420,7 @@ def run(rf_params: dict | None = None) -> dict:
         "model_kind": kind,
         "coefficients_csv": coef_csv_path,
         "n_segmented_train": len(df_base),
-        "n_synthetic_train": n_synth,
+        "n_synthetic_train": 0,
         "n_close_calls_usable": len(df_cc),
         "oof_accuracy_close_calls": cc_cv["oof_accuracy_close_calls"],
         "close_call_fold_accuracies": cc_cv["fold_accuracies_close_calls_only"],
@@ -482,14 +454,12 @@ if __name__ == "__main__":
         else (
             "labeled close calls only"
             if r["train_close_calls_only"]
-            else "segmented (+ optional synth) + close-call folds"
+            else "segmented reference + close-call folds"
         ),
     )
     print(
         "Training rows — segmented:",
         r["n_segmented_train"],
-        "synthetic:",
-        r["n_synthetic_train"],
     )
     print("Usable labeled close calls:", r["n_close_calls_usable"])
     print("Close-call CV: StratifiedKFold (legal/goaltend mix per fold)")

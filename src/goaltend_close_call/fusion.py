@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .shape_time_features import extract_shape_features
-from .spectrogram_features import extract_features
+from .shape import extract_shape_features
+from .spectrogram import extract_features
 
 
 def extract_fusion_features(

@@ -169,7 +169,7 @@ def crop_peak_window(
     return t[sl], a1[sl], a2[sl]
 
 
-def discover_segmented_folders(data_root: str | Path) -> list[tuple[Path, str]]:
+def discover_reference_folders(data_root: str | Path) -> list[tuple[Path, str]]:
     """
     Return ``(folder_path, canonical_label)`` for each **reference** class folder.
 
@@ -222,4 +222,4 @@ if __name__ == "__main__":
     tg, g1, g2 = load_recording_csv(goal)
     print(f"Goaltend sample: {goal.name}")
     print(f"  shape g1,g2: {g1.shape}, {g2.shape}  (physical sensors 1 and 3)")
-    print("sensor_io OK")
+    print("sensors OK")
