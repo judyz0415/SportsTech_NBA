@@ -8,13 +8,7 @@
 
 A missed or incorrectly awarded goaltend call is worth **2–3 points and a possession** — among the highest-leverage single-call errors in basketball officiating. Close-call goaltends are routinely the subject of coach's challenges and league reviews, yet no sensor-based analytical layer exists to support those decisions.
 
-This project builds that layer: a machine learning pipeline that reads raw vibration data off a backboard-mounted accelerometer and outputs a probability that a play is a goaltend — fast enough to inform an in-game challenge and rigorous enough to hold up under post-game review.
-
-**Potential front office applications:**
-- **Challenge strategy:** Give coaches a second data stream before burning a challenge on a disputed block/goaltend play.
-- **Opponent scouting:** Identify which opposing bigs play near the goaltend boundary — and which defensive schemes create reviewable situations.
-- **Officiating analytics:** Track disputed-call patterns across arenas, officials, and game situations to inform front-office advocacy with the league office.
-- **Defensive scheme design:** Understand the physical signature of legal vs. illegal backboard contacts to train rim protectors on timing and hand placement.
+This project builds that layer: a machine learning pipeline that reads raw vibration data off a backboard-mounted accelerometer and outputs a probability that a play is a goaltend, and it is fast enough to inform an in-game challenge and rigorous enough to hold up under post-game review.
 
 ---
 
