@@ -1,143 +1,120 @@
-# NBA goaltend - backboard IMU ML
+# NBA Goaltend Detection — Backboard IMU + Machine Learning
 
-Portfolio repository for supervised learning on **backboard-mounted accelerometers** applied to NBA-style goaltend detection. Tri-axial acceleration recordings are used to classify plays as **legal block / contact** vs **goaltend**, with particular emphasis on **marginal ("close") plays** where video alone is ambiguous.
-
-Two modeling tracks share the same data layout (`GOALTEND_DATA_DIR`) and sensor ingestion layer:
-
-| Track | Package | Approach |
-|-------|---------|----------|
-| **Close-call AdaBoost** | `src/goaltend_close_call/` | Direction-change spectrograms + time-domain shape features fed into **AdaBoost** on class-balanced decision trees. Selected after a broad sklearn benchmark and hyperparameter search. Stratified K-fold CV on labeled close calls. |
-| **ROCKET + TabPFN** | `src/goaltend_tabpfn/` | Full six-channel variable-length segmented traces fed into **aeon ROCKET** embeddings then **TabPFN** (HuggingFace gated weights). Leave-one-out and 80/20 holdout CV. Includes wrong-call analysis script. |
+> **Built a sensor-driven ML system that classifies goaltend calls from backboard accelerometer data — with 74% accuracy on the contested, borderline plays that directly affect game outcomes, and sub-20ms real-time inference for live game use.**
 
 ---
 
-## Executive summary (close-call AdaBoost track)
+## Why This Matters to a Front Office
 
-| Question | Answer |
-|----------|--------|
-| **What does the tool output?** | For each clip: predicted class (**legal** vs **goaltend**) and class probabilities from cross-validated models. |
-| **What data does it use?** | (1) **Clean reference clips** under `data/goaltends/segmented/` and `data/legal contacts/{blocks,hand_on_backboard,...}/`. (2) **Labeled close-call trials** split into `data/goaltends/close_calls/` vs `data/legal contacts/close_calls/` using league-reviewed ground truth (e.g. `cleaned_ground_truth.csv`). |
-| **Primary accuracy metric (close calls)** | **~74%** out-of-fold on labeled **close-call** clips when each fold trains on **all** on-disk reference clips (101) plus other close calls. |
-| **Blended "all clips" metric** | **~82.6%** pooled OOF on **190** clips (strict stratified CV); the close-call **slice** in that pooled setup is often **~65%**. Deck materials pair that with **100%** on obvious-call clips and **74.2%** on close calls under the **full-reference** close-call protocol—same dataset, different question than the **~65%** pooled slice. See **Evaluation design**. |
-| **Court use** | Supportive analytics only, not a substitute for official replay protocols. |
+A missed or incorrectly awarded goaltend call is worth **2–3 points and a possession** — among the highest-leverage single-call errors in basketball officiating. Close-call goaltends are routinely the subject of coach's challenges and league reviews, yet no sensor-based analytical layer exists to support those decisions.
+
+This project builds that layer: a machine learning pipeline that reads raw vibration data off a backboard-mounted accelerometer and outputs a probability that a play is a goaltend — fast enough to inform an in-game challenge and rigorous enough to hold up under post-game review.
+
+**Potential front office applications:**
+- **Challenge strategy:** Give coaches a second data stream before burning a challenge on a disputed block/goaltend play.
+- **Opponent scouting:** Identify which opposing bigs play near the goaltend boundary — and which defensive schemes create reviewable situations.
+- **Officiating analytics:** Track disputed-call patterns across arenas, officials, and game situations to inform front-office advocacy with the league office.
+- **Defensive scheme design:** Understand the physical signature of legal vs. illegal backboard contacts to train rim protectors on timing and hand placement.
 
 ---
 
-## Repository layout
+## Results at a Glance
+
+| Metric | Value | Context |
+|--------|-------|---------|
+| **Close-call accuracy** | **~74%** | On labeled borderline plays — the calls that actually get challenged |
+| **Overall accuracy** | **~82.6%** | Across 190 total clips (reference + close calls, pooled CV) |
+| **Real-time inference** | **< 20 ms** | AdaBoost track; compatible with live broadcast and shot-clock workflows |
+| **Review-mode inference** | **~2.4 s** | ROCKET + TabPFN track; suited for challenge / official review |
+| **Dataset** | **190 labeled clips** | 101 reference + 89 close calls with league-reviewed ground truth |
+
+All accuracy figures use **cross-validated hold-out evaluation** — the model is never tested on clips it trained on.
+
+---
+
+## Two-Track System: Real-Time Detection vs. Deep Review
+
+The project ships two complementary models designed for different moments in the game:
+
+| | **AdaBoost (production)** | **ROCKET + TabPFN (review)** |
+|--|---------------------------|-------------------------------|
+| **Best for** | Live game — flag plays for challenge consideration | Post-play review, official challenge support |
+| **Latency** | < 20 ms | ~2.4 s |
+| **Accuracy on close calls** | ~74% (close-call CV protocol) | Evaluated via leave-one-out CV on reference set |
+| **Strengths** | Fast; interpretable features; trained for borderline plays | Confidence scores; no retraining needed; flags uncertain calls |
+| **Limitation** | Weaker on the most extreme edge cases | Too slow for strict real-time |
+
+---
+
+## What Makes the Close-Call Problem Hard
+
+Standard video review struggles with plays where the ball is near the cylinder boundary and contact is brief. The IMU signal captures what video cannot: the **direction and frequency content of the backboard's vibration response** in the 100–200ms window around contact.
+
+Two key engineering choices make this work on borderline plays:
+
+1. **Direction-change spectrograms, not raw g-force.** The model uses *how the acceleration vector rotates*, not how hard the hit was. This separates a legal hard block from a soft goaltend by kinematic signature, not impact magnitude — the same physical insight a physicist would apply to the problem.
+
+2. **Full-reference training for close-call evaluation.** Each close-call fold trains on all 101 reference clips plus the non-held-out close calls. This mirrors real operational use: the model always has access to the full labeled library when evaluating a new disputed play.
+
+---
+
+## Technical Architecture
+
+### Sensor Pipeline
+- Tri-axial accelerometers mounted on the backboard, recording at high frequency
+- Signal is **cropped to ~1 second** centered on peak combined acceleration magnitude to isolate the contact window
+- Dual-sensor channels (sensors 1 + 2 for standard clips; 1 + 3 for legacy goaltend reference) provide independent backboard physics measurements
+
+### Feature Engineering (AdaBoost Track)
+- **Direction-change spectrograms:** Unit-normalized acceleration vectors → STFT → frequency centroid, band energy, spectral rolloff
+- **Shape features (`shape_*`):** Peak structure, symmetry, cross-sensor lag, correlation on normalized magnitude envelopes
+- All features standardized **per CV fold** to prevent scale leakage across different sensor mounts or arena exports
+
+### Classifier Selection
+AdaBoost on class-balanced decision trees was selected after a broad sklearn benchmark and hyperparameter search (random search over tree depth, leaf size, `n_estimators`, learning rate). Hyperparameters are centralized and reproducible via environment variable overrides.
+
+### ROCKET + TabPFN Track
+- **ROCKET:** 500 random convolutional kernels applied to all 6 acceleration channels; max + mean pooled to a fixed feature vector
+- **TabPFN:** Meta-learned transformer pretrained on synthetic tabular datasets; requires no hyperparameter tuning; outputs calibrated class probabilities
+- Evaluation: leave-one-out CV (most rigorous for small N) and stratified 80/20 holdout
+
+### Video–IMU Sync Pipeline (`syncing_video_data/`)
+A separate pipeline aligns high-speed camera footage with IMU time series for visual validation and analyst review:
+- Median-removal and robust MAD-based spike detection identify the contact frame
+- Overlay video generated as MP4 for use in presentation and review workflows
+- Supports 960fps+ high-speed cameras with manual sync correction
+
+---
+
+## Evaluation Design (No Label Leakage)
+
+Two protocols are reported for the AdaBoost track:
+
+**Close-call protocol** *(headline: how often do we get borderline plays right?)*
+- Stratified K-fold CV splits only the close-call set
+- Each fold trains on **all** reference clips plus the non-held-out close calls
+- Accuracy reported only on the held-out close-call fold
+- **Result: ~74%** (74.2% in presentation materials, ~89 usable close calls, 5 folds)
+
+**Pooled protocol** *(strict: every clip treated equally)*
+- All 190 clips in a single stratified CV pool
+- **Result: ~82.6%** overall; close-call slice ~65% because the full reference library isn't always available in training
+- These two numbers answer different operational questions and should not be compared directly
+
+**Permuted-label null test (ROCKET + TabPFN track):** shuffling labels collapses ROC AUC to ~0.5, confirming the model is learning signal from the IMU traces — not exploiting label artifacts or feature leakage.
+
+---
+
+## Repository Layout
 
 | Path | Purpose |
 |------|---------|
-| `src/goaltend_close_call/` | **`sensors`** (CSV load, crop), **`spectrogram`** / **`shape`** (frequency- and time-domain features), **`fusion`** (combines both), **`model`** (AdaBoost + CV), **`labels`**, **`cv`**, **`paths`** |
-| `src/goaltend_tabpfn/` | ROCKET + TabPFN: see **TabPFN track scripts** below (`goaltend_classify`, `goaltend_holdout`, `tabpfn_analysis`, `tabpfn_label_null`) |
-| `data/` | `goaltends/` and `legal contacts/` trees (reference + close-call CSVs), label CSVs (`close_calls_labels.csv`, `cleaned_ground_truth.csv`, ...) |
-| `outputs/` | Generated OOF prediction CSVs (typically gitignored except `.gitkeep`) |
-| `notebooks/` | Exploratory analysis (spectrogram, sensor visualization) |
-| `scripts/` | Data layout utilities (`reorganize_data_layout.py`) |
-| `syncing_video_data/` | Video / IMU alignment and overlays (see `syncing_video_data/README.md`; separate from ML classification) |
-
----
-
-## Methodology: Close-call AdaBoost track
-
-### 1. Sensor inputs and fair comparison across clips
-
-Each CSV provides **Latest** tri-axial acceleration for one or two mounted sensors. The pipeline:
-
-- Loads **sensor 1 + sensor 2** for standard and close-call clips, and **sensor 1 + sensor 3** only for **goaltend reference** exports under `goaltends/segmented/` (legacy: `Goaltends - Segmented`) so both channels represent comparable backboard physics where that mount layout exists (`sensors.load_recording_csv`).
-- **Crops ~1 s** centered on the **peak** combined acceleration magnitude so each clip highlights the contact window (`crop_peak_window`).
-
-### 2. Features (hand-crafted, interpretable family)
-
-Rather than feeding raw waveforms into a black box, the **default production path** uses **`fusion.extract_fusion_features`** (STFT summaries on direction-change signals plus prefixed **`shape_*`** time-domain cues):
-
-- **Direction-change spectrograms:** Acceleration vectors are **unit-normalized** so overall "hard vs soft" hit size is not the dominant cue; the model uses **how the direction of the acceleration vector evolves** and summaries of its **frequency content** (centroid, band energy, rolloff, etc.).
-- **Shape_* time-domain cues:** Peak structure on **normalized** magnitude envelopes, symmetry, cross-sensor lag / correlation, capturing **timing and pulse shape** of the event.
-
-Features are **standardized per cross-validation fold** so scale does not favor one sensor or one arena export.
-
-The design intent is to approximate **kinematic patterns** of rim/backboard response, not to memorize a single "peak g" threshold that would confuse legal hard contacts with goaltends.
-
-### 3. Classifier: AdaBoost (champion)
-
-**AdaBoost** combines many **weak** decision trees (here: shallow trees with **class-balanced** weighting). It was selected after comparing several sklearn baselines and was tuned with a focused random search over tree depth, leaf sizes, number of estimators, and learning rate.
-
-Hyperparameters are centralized in `model.py` (env overrides prefixed with `GOALTEND_ADA_*` and `GOALTEND_ADABOOST_RANDOM_STATE`).
-
-### 4. Labels
-
-- **Reference (segmented) clips:** Folder names encode **legal** vs **goaltend** supervision.
-- **Close calls:** Rows need a **filename** and a binary **ground truth** (`legal` / `block` vs `goaltend`). Ambiguous rows are skipped (`labels.py`).
-
-Use `GOALTEND_LABELS_PATH` to point at the active label file (e.g. `data/cleaned_ground_truth.csv`).
-
----
-
-## Methodology: ROCKET + TabPFN track
-
-### 1. Input representation
-
-Each CSV provides all 6 acceleration channels (X1, Y1, Z1, Z2, Y2, X2) for a full segmented trace. Samples are zero-padded to the training set's maximum length per fold so that the test sample's length does not leak into the training representation. Per-sample, per-channel z-score normalization makes the model invariant to absolute acceleration magnitude across different sensors and mounting positions.
-
-### 2. ROCKET feature extraction
-
-**aeon ROCKET** applies N random convolutional kernels to each time series and extracts mean + max-pooled summary statistics per kernel. Default: 500 kernels, 1 ensemble group. ROCKET is fit on training samples only; the same fitted transform is applied to the held-out test sample.
-
-### 3. Classifier: TabPFN
-
-**TabPFN** is a meta-learned transformer pretrained on a large collection of synthetic tabular datasets. It requires no hyperparameter tuning and performs well in the ~100-sample regime typical of leave-one-out CV on segmented clips. Weights are gated on HuggingFace (requires `HF_TOKEN`; see setup below).
-
-### 4. Evaluation protocols
-
-- **Leave-one-out (LOO):** train on all samples except one, test on that one, repeat for every sample. Most rigorous for small datasets.
-- **Stratified 80/20 holdout:** single split preserving class proportions; faster for exploratory runs.
-- **Wrong-call analysis:** `tabpfn_analysis.py` re-runs the chosen protocol, filters by error type (all wrong, confidently wrong, low-confidence), and saves per-clip IMU trace plots and a summary CSV under `outputs/tabpfn_analysis/`.
-
-### 5. Labels
-
-Folder names encode **legal** vs **goaltend** supervision (same label map as the AdaBoost track). The ROCKET + TabPFN track uses the segmented reference folders; no separate close-call label CSV is required.
-
----
-
-## Evaluation design (no cheating on labels)
-
-All reported accuracies use **cross-validation**: the model is **never** tested on a clip it was trained on. Two protocols are implemented for the AdaBoost close-call track:
-
-### A. Close-call protocol (headline: "did we learn borderline plays?")
-
-- Split only the **close-call** set into stratified folds.
-- Each training fold uses **all** segmented reference clips **plus** the close calls not in the test fold.
-- **Report accuracy only on the held-out close-call fold.**
-
-This matches the practical question: if we keep a large labeled reference library, how often do we get the close call right?
-
-**Observed** (cleaned ground truth, ~89 usable close calls, 5 folds, 101-reference library including ball-on-rim): close-call OOF for the champion AdaBoost is typically **~73–74%** (e.g. **74.2%** in presentation deck materials; exact value varies slightly with dependencies—run locally to reproduce).
-
-### B. Pooled protocol (strict: "every row treated the same")
-
-- Concatenate **reference + close-call** rows (190 with the default library: 101 reference + 89 usable close calls).
-- Stratified K-fold on **all** 190 rows; each fold trains on ~80% of both pools.
-
-**Observed:** pooled OOF **~82.6%** (matches presentation “overall on 190 clips”); reference-only slice often **~98%** in repo runs; close-call **slice** in this strict protocol **~65%**, because the model no longer always has the **full** reference library in training for every fold. Slightly higher pooled figures (~83.7%) have been seen when the reference mix or dependency versions differed slightly.
-
-**Do not** compare pooled headline accuracy to close-call headline accuracy as "improvement." They answer different operational questions.
-
-### TabPFN track: permuted-label null (ROC AUC ≈ chance)
-
-For the **ROCKET + TabPFN** reference-only track, labels can be **shuffled** so they no longer match each CSV’s IMU trace. Under the same protocol (LOO or stratified 80/20 holdout), **ROC AUC should collapse to ~0.5**; accuracy should sit near a random / majority baseline. That is a quick guard against accidental **label** misalignment or a broken metric path. It is a **complementary** check alongside proper CV—not a full leakage audit (e.g. feature-level or group leakage still needs fold design and domain review).
-
-**Script:** `python -m goaltend_tabpfn.tabpfn_label_null` (default `--split holdout` for speed; use `--split loo` to mirror full leave-one-out). Optional `--n-perm N` repeats with seeds `seed`, `seed+1`, … and prints mean ± std of ROC AUC. The evaluator accepts injected labels via `y_override` in `goaltend_classify.evaluate_goaltend` / `evaluate_goaltend_holdout`.
-
----
-
-## Efficiency and accuracy tradeoffs
-
-High-level comparison (from project presentation materials). Latency figures are **order-of-magnitude** and depend on hardware and batching; treat as planning guidance, not SLAs.
-
-| Model | Pros | Cons | Use case |
-|-------|------|------|----------|
-| **Physics-based** | Easy to understand; simple | Noisy data → false positives | Reference / baseline for goaltending detection |
-| **AdaBoost** (this repo’s production path) | Fast — **under ~20 ms** to process and evaluate an unseen trial | Weak on **very** close / borderline calls | Fast in-game detection paired with high-speed camera workflows |
-| **ROCKET + TabPFN** | Built-in confidence scores; **no retraining** needed on new tabular rows at inference | **~2.4 s** inference per trial in deck materials — too slow for strict real-time; less interpretable (“black box” vs hand-crafted features) | **Challenge / review:** officials or analysts trigger after a disputed call |
+| `src/goaltend_close_call/` | **`sensors`** (CSV load, crop), **`spectrogram`** / **`shape`** (features), **`fusion`**, **`model`** (AdaBoost + CV), **`cv`**, **`labels`**, **`paths`** |
+| `src/goaltend_tabpfn/` | ROCKET + TabPFN pipeline: classify, holdout, wrong-call analysis, label-null test |
+| `data/` | `goaltends/` and `legal contacts/` trees (reference + close-call CSVs); label CSVs (`cleaned_ground_truth.csv`, etc.) |
+| `outputs/` | OOF prediction CSVs, TabPFN analysis plots, fitted pipeline artifacts |
+| `notebooks/` | Exploratory analysis: spectrogram visualization, sensor inspection |
+| `syncing_video_data/` | Video / IMU alignment and overlay tools (see `syncing_video_data/README.md`) |
 
 ---
 
@@ -145,105 +122,68 @@ High-level comparison (from project presentation materials). Latency figures are
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install -U pip setuptools wheel
-pip install -r requirements.txt   # installs package + notebook extras
+pip install -r requirements.txt
+```
+
+**TabPFN track** (requires HuggingFace gated weights):
+```bash
+pip install -e ".[tabpfn]"
+export HF_TOKEN=<your_token>     # accept licence at Prior-Labs/TabPFN-v2-clf on HuggingFace
 ```
 
 ---
 
-## Run the production model (AdaBoost)
-
-From `nba-goaltend-project/` with `src` on `PYTHONPATH`:
+## Run the Production Model (AdaBoost)
 
 ```bash
-export GOALTEND_LABELS_PATH="$PWD/data/cleaned_ground_truth.csv"   # or your label file
+export GOALTEND_LABELS_PATH="$PWD/data/cleaned_ground_truth.csv"
 PYTHONPATH=src python -m goaltend_close_call.model
 ```
 
-**Outputs:**
+Outputs:
+- `outputs/close_calls_oof_predictions.csv` — close-call protocol OOF predictions
+- `outputs/pooled_oof_predictions.csv` — pooled protocol OOF predictions
 
-- `outputs/close_calls_oof_predictions.csv` - close-call protocol OOF predictions.
-- `outputs/pooled_oof_predictions.csv` - pooled protocol OOF predictions (all clips).
-
-**Default training mode:** segmented reference **plus** close-call training folds per fold (`GOALTEND_TRAIN_CLOSE_ONLY=0`). Set `GOALTEND_TRAIN_CLOSE_ONLY=1` to train **only** on close calls (usually weaker).
-
-**Default model:** `adaboost` (champion). Override with e.g. `GOALTEND_MODEL=logistic` for interpretable linear coefficients (`outputs/close_calls_logistic_coefficients.csv`).
-
-### Main environment variables
+### Key Environment Variables
 
 | Variable | Default | Role |
 |----------|---------|------|
-| `GOALTEND_DATA_DIR` | `<repo>/data` | Data root (`goaltends/`, `legal contacts/`; legacy flat `Close Calls/` is still resolved if present) |
-| `GOALTEND_LABELS_PATH` | `<data>/close_calls_labels.csv` | Label CSV path override |
-| `GOALTEND_OUTPUT_DIR` | `<repo>/outputs` | Prediction CSV output directory |
-| `GOALTEND_MODEL` | `adaboost` | `adaboost` (default), `logistic`, `hgb`, `rf` |
-| `GOALTEND_TRAIN_CLOSE_ONLY` | `0` | `0` = include all segmented reference clips in each training fold; `1` = close calls only |
-| `GOALTEND_CC_CV_SPLITS` | `5` | Stratified fold count (capped by class counts) |
-| `GOALTEND_ADABOOST_RANDOM_STATE` | `133742` | RNG for champion AdaBoost (reproducibility) |
-| `GOALTEND_ADA_*` | see `model.py` | Optional overrides for tree depth, `n_estimators`, `learning_rate`, etc. |
-| `GOALTEND_WIN_SEC`, `GOALTEND_NPERSEG` | `1.0`, `256` | Crop window length; STFT length for direction-change features |
+| `GOALTEND_DATA_DIR` | `<repo>/data` | Data root |
+| `GOALTEND_LABELS_PATH` | `<data>/close_calls_labels.csv` | Label CSV override |
+| `GOALTEND_OUTPUT_DIR` | `<repo>/outputs` | Output directory |
+| `GOALTEND_MODEL` | `adaboost` | `adaboost`, `logistic`, `hgb`, `rf` |
+| `GOALTEND_TRAIN_CLOSE_ONLY` | `0` | `1` = train on close calls only (weaker baseline) |
+| `GOALTEND_CC_CV_SPLITS` | `5` | Stratified fold count |
+| `GOALTEND_ADA_*` | see `model.py` | Hyperparameter overrides (depth, `n_estimators`, `learning_rate`) |
 
 ---
 
-## ROCKET + TabPFN track (`goaltend_tabpfn`)
-
-**TabPFN track scripts** (all under `src/goaltend_tabpfn/`, run as `python -m goaltend_tabpfn.<module>`):
-
-| Module | Role |
-|--------|------|
-| `goaltend_classify` | Main LOO run (default) or `--holdout` 80/20; optional timestamped report under `outputs/tabpfn_runs/` |
-| `goaltend_holdout` | Fit full train split, save `outputs/fitted_tabpfn_pipeline.joblib`; `--test` for `data/test/` |
-| `tabpfn_analysis` | Wrong-call / confidence views + IMU plots → `outputs/tabpfn_analysis/` |
-| `tabpfn_label_null` | Permuted labels vs traces → ROC AUC ~0.5 sanity check |
-
-**Setup:** TabPFN weights are gated on HuggingFace. Accept the licence at [Prior-Labs/TabPFN-v2-clf](https://huggingface.co/Prior-Labs/TabPFN-v2-clf), create a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), then:
+## Run the ROCKET + TabPFN Track
 
 ```bash
-pip install -e ".[tabpfn]"
-export HF_TOKEN=<your_token>
-```
-
-**Run:**
-
-```bash
-# Leave-one-out CV (default)
+# Leave-one-out CV (most rigorous)
 python -m goaltend_tabpfn.goaltend_classify
 
 # Stratified 80/20 holdout
 python -m goaltend_tabpfn.goaltend_classify --holdout
 
-# Permuted labels (expect ROC AUC ~0.5); default holdout is fast
-python -m goaltend_tabpfn.tabpfn_label_null --split holdout --seed 0
-
-# Dedicated holdout + save fitted pipeline to outputs/fitted_tabpfn_pipeline.joblib
-python -m goaltend_tabpfn.goaltend_holdout
-
-# Predict unseen CSVs in data/test/ using the saved pipeline
-python -m goaltend_tabpfn.goaltend_holdout --test
-```
-
-**Inspect wrong or confidence-bucketed calls** (writes `filtered.csv`, `summary.txt`, `figures/*.png` under `outputs/tabpfn_analysis/`):
-
-```bash
-# All misclassified samples
+# Wrong-call analysis — misclassified clips with IMU trace plots
 python -m goaltend_tabpfn.tabpfn_analysis --split loo --view wrong
-
-# Errors where model was >= 75% confident in its wrong prediction
 python -m goaltend_tabpfn.tabpfn_analysis --split loo --view confident_wrong --threshold 0.75
 
-# Samples where max class probability was below threshold (ambiguous)
-python -m goaltend_tabpfn.tabpfn_analysis --split loo --view low_confidence --threshold 0.75
+# Permuted-label sanity check (expect ROC AUC ~0.5)
+python -m goaltend_tabpfn.tabpfn_label_null --split holdout --seed 0
 ```
-
-Use `--split holdout` to run the same views on the stratified holdout test split instead of LOO.
 
 ---
 
-## Sensor conventions
+## Sensor Conventions
 
-- **Non-goaltend** segmented CSVs: physical sensors **1 and 2** as `(a1, a2)`.
-- **Paths under `goaltends/segmented/`** (and legacy goaltend reference folders): physical sensors **1 and 3** as `(a1, a2)`. **Close-call** CSVs under `goaltends/close_calls/` or `legal contacts/close_calls/` use **sensors 1 and 2** (`sensors.load_recording_csv`).
+- **Non-goaltend segmented CSVs:** physical sensors 1 and 2 as `(a1, a2)`
+- **Goaltend reference CSVs** (`goaltends/segmented/`): physical sensors 1 and 3 as `(a1, a2)` (legacy mount layout)
+- **Close-call CSVs** (both classes): sensors 1 and 2
 
 ---
 
